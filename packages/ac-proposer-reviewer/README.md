@@ -90,3 +90,8 @@ The default suite uses fake providers:
 ```bash
 python -m pytest packages/ac-proposer-reviewer/tests
 ```
+
+Failed-run recovery uses a fresh execution scope for pending loops, preventing
+replay of provider sessions from an earlier recovery epoch. A normal stop stays
+within the same epoch and resumes pending work. A stop observed when a worker
+returns takes precedence over a simultaneous worker failure.
