@@ -4332,12 +4332,12 @@ def test_optional_projection_corruption_preserves_core_blocks_and_records_fallba
         )
     )
 
-    assert [block.kind for block in corrupted.blocks] == [
-        block.kind for block in valid.blocks
-    ]
-    assert [block.payload for block in corrupted.blocks] == [
-        block.payload for block in valid.blocks
-    ]
+    # The inserted prefix is authored content, not optional presentation.
+    # Preserve it as a separate fallback block instead of losing it.
+    assert "prefix" in str([block.payload for block in corrupted.blocks])
+    without_prefix = [block for block in corrupted.blocks if block.payload.get("text") != "prefix"]
+    assert [block.kind for block in without_prefix] == [block.kind for block in valid.blocks]
+    assert [block.payload for block in without_prefix] == [block.payload for block in valid.blocks]
     categories = _diagnostic_categories(corrupted)
     assert "figure_layout" in categories
     assert "table_presentation" in categories
@@ -6502,3 +6502,51 @@ def test_source_repository_asset_manifest_is_strict_and_verified(tmp_path):
     with pytest.raises(Exception) as error:
         repository.read_asset_bytes(stored)
     assert getattr(error.value, "code", "") == "asset_corrupt"
+
+
+def test_html_subtitle_authors_and_embedded_email_remain_structured(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    document = RichDocumentParserService(repository).parse_source(
+        _store(
+            repository,
+            rb"""
+      <article><h1>Paper</h1><div class="ltx_subtitle">A subtitle</div>
+      <div class="ltx_authors"><span class="ltx_creator ltx_role_author">
+      <span class="ltx_personname">Ada Author<span class="ltx_ERROR">\corrauth</span>ada@example.test</span>
+      <span class="ltx_contact ltx_role_affiliation">Institute</span>
+      </span></div><p>Body.</p></article>""",
+            SourceFormat.HTML,
+        )
+    )
+    front = source_front_matter(document)
+    assert front is not None
+    assert front["entries"][0]["authors"][0]["name"] == "Ada Author"
+    assert (
+        front["entries"][0]["authors"][0]["contacts"][0]["value"] == "ada@example.test"
+    )
+    assert any(block.payload.get("text") == "A subtitle" for block in document.blocks)
+    assert not any("corrauth" in str(block.payload) for block in document.blocks)
+
+
+def test_html_span_grid_and_acknowledgement_wrapper_targets(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    document = RichDocumentParserService(repository).parse_source(
+        _store(
+            repository,
+            b"""
+      <article><p><a href="#T1">Table 1</a><a href="#ack">Acknowledgements</a></p>
+      <figure class="ltx_table" id="T1"><span class="ltx_tabular">
+      <span class="ltx_tr"><span class="ltx_td">Band</span><span class="ltx_td">Value</span></span>
+      <span class="ltx_tr"><span class="ltx_td">r</span><span class="ltx_td">21.5</span></span>
+      </span><figcaption>Table 1: Values.</figcaption></figure>
+      <div class="ltx_acknowledgements" id="ack"><p id="ack.1">Thanks.</p></div></article>""",
+            SourceFormat.HTML,
+        )
+    )
+    table = next(
+        block for block in document.blocks if block.kind is RichBlockKind.TABLE
+    )
+    assert table.payload["headers"] == ("Band", "Value")
+    assert table.payload["rows"] == (("r", "21.5"),)
+    assert _source_target(document, "T1")["block_id"] == table.block_id
+    assert _source_target(document, "ack")["block_id"] == document.blocks[-1].block_id

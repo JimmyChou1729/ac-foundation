@@ -218,6 +218,19 @@ class HTMLSourceAcquisitionService:
         self.transport = transport or StdlibHTTPSWebTransport()
         self.resolver = resolver or _resolve_addresses
 
+    def fetch_resource(
+        self, url: str, *, maximum_bytes: int = 50 * 1024 * 1024,
+        policy: HTMLAcquisitionPolicy | None = None,
+    ) -> tuple[WebResponse, str]:
+        """Fetch a document resource with the same per-hop public-address checks.
+
+        This does not parse, cache, or infer a representation. The caller must
+        validate the returned media type and retain the exact final URL.
+        """
+        if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or not 1 <= maximum_bytes <= 100 * 1024 * 1024:
+            raise ValueError("maximum_bytes must be between 1 and 100 MiB")
+        return self._fetch_following(url, policy=policy or HTMLAcquisitionPolicy(), maximum_bytes=maximum_bytes, too_large_code="document_resource_too_large")
+
     def acquire(
         self,
         url: str,
@@ -245,6 +258,22 @@ class HTMLSourceAcquisitionService:
             too_large_code="html_primary_too_large",
             initial_target=requested_target,
         )
+        return self.materialize_response(response, requested_url=requested_url, policy=resolved_policy)
+
+    def materialize_response(self, response: WebResponse, *, requested_url: str,
+                             policy: HTMLAcquisitionPolicy | None = None) -> HTMLSourceBundle:
+        """Admit an already fetched HTML primary without a second network request."""
+        if not isinstance(self.storage, SourceRepositoryHTMLSourceBundleStorage):
+            raise HTMLSourceBundleError(
+                "html_direct_acquisition_storage_unsupported",
+                "direct acquisition requires the default SourceRepository storage adapter",
+            )
+        resolved_policy = policy or HTMLAcquisitionPolicy()
+        requested_url = normalize_https_url(requested_url, allowed_origins=resolved_policy.allowed_origins)
+        final_url = normalize_https_url(response.url, allowed_origins=resolved_policy.allowed_origins)
+        if not 200 <= response.status < 300 or len(response.body) > resolved_policy.max_primary_bytes:
+            raise HTMLSourceBundleError("html_primary_invalid", "fetched primary status or size is invalid")
+        request_key = self.cache.request_key(requested_url, resolved_policy.to_document())
         media_type = _response_media_type(response)
         if media_type not in _PRIMARY_MEDIA_TYPES:
             raise HTMLSourceBundleError(
