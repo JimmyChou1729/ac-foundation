@@ -95,7 +95,7 @@ from .storage import (
 )
 from .working import WorkingState
 
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 
 __all__ = [
     "AcJobsError",

@@ -96,7 +96,7 @@ from .workflow_support import (
     semantic_retry_request,
 )
 
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 
 __all__ = [
     "DEFAULT_MAX_PARALLEL_PROVIDER_CALLS",
