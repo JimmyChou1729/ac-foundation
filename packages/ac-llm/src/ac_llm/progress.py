@@ -39,6 +39,8 @@ class DurableProviderObserver:
             "generation": generation,
             "host_turn_round": host_turn_round,
         }
+        if all(hasattr(context, name) for name in ("run_id", "recovery_epoch", "attempt")):
+            self.metadata["call_id"] = f"{context.run_id}:{context.recovery_epoch}:{context.attempt}:{task_id}:{generation}:{host_turn_round}"
         self.observation_errors: list[str] = []
 
     def native_handle(self, handle: NativeResumeHandle) -> None:

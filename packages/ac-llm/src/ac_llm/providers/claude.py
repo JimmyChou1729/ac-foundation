@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..errors import ProviderFailure
+from ..errors import ProviderFailure, FailureCategory
 from ..output import CandidateMaterial
 from ._cli import (
     classify_provider_failure_evidence,
     executable_diagnostic,
     run_cli,
+    validate_local_app_environment,
 )
 from .base import (
     IsolationMode,
@@ -51,6 +52,7 @@ class ClaudeAdapter:
             tool_isolation=IsolationMode.EXPLICIT,
             cooperative_stop=True,
             provider_persistence=True,
+            reasoning_efforts=("low", "medium", "high", "max"),
         )
 
     def doctor(self) -> ProviderDiagnostic:
@@ -58,6 +60,7 @@ class ClaudeAdapter:
         return ProviderDiagnostic(self.name, available, path)
 
     def start(self, request: ProviderRequest, observer: Any, stop: Any) -> ProviderExecution:
+        prompt = request.prompt
         argv = [
             self.binary,
             "--print",
@@ -67,8 +70,15 @@ class ClaudeAdapter:
             "--model",
             request.model,
         ]
-        if request.capabilities.get("effective_host_mode") == "direct":
+        if request.capabilities.get("execution_profile") == "local_app":
+            validate_local_app_environment(
+                self.name, request.environment if request.environment is not None else self.env
+            )
+            prompt = _local_app_arguments(argv, request)
+        elif request.capabilities.get("effective_host_mode") == "direct":
             argv.append("--dangerously-skip-permissions")
+        if request.reasoning_effort is not None:
+            argv.extend(["--effort", request.reasoning_effort])
         if request.output_schema is not None:
             argv.extend(
                 [
@@ -83,12 +93,13 @@ class ClaudeAdapter:
             )
         return self._run(
             argv,
-            request.prompt,
+            prompt,
             request.idle_timeout_seconds,
             request.workspace,
             request.environment,
             observer,
             stop,
+            total_timeout_seconds=getattr(request, "total_timeout_seconds", None),
         )
 
     def resume(
@@ -98,6 +109,7 @@ class ClaudeAdapter:
         observer: Any,
         stop: Any,
     ) -> ProviderExecution:
+        prompt = request.prompt
         argv = [
             self.binary,
             "--print",
@@ -107,8 +119,15 @@ class ClaudeAdapter:
             "--resume",
             handle.value,
         ]
-        if request.capabilities.get("effective_host_mode") == "direct":
+        if request.capabilities.get("execution_profile") == "local_app":
+            validate_local_app_environment(
+                self.name, request.environment if request.environment is not None else self.env
+            )
+            prompt = _local_app_arguments(argv, request)
+        elif request.capabilities.get("effective_host_mode") == "direct":
             argv.append("--dangerously-skip-permissions")
+        if request.reasoning_effort is not None:
+            argv.extend(["--effort", request.reasoning_effort])
         if request.output_schema is not None:
             argv.extend(
                 [
@@ -123,12 +142,13 @@ class ClaudeAdapter:
             )
         return self._run(
             argv,
-            request.prompt,
+            prompt,
             request.idle_timeout_seconds,
             request.workspace,
             request.environment,
             observer,
             stop,
+            total_timeout_seconds=getattr(request, "total_timeout_seconds", None),
         )
 
     def _run(
@@ -140,6 +160,7 @@ class ClaudeAdapter:
         environment: Mapping[str, str] | None,
         observer: Any,
         stop: Any,
+        *, total_timeout_seconds: float | None = None,
     ) -> ProviderExecution:
         return run_cli(
             provider=self.name,
@@ -148,6 +169,7 @@ class ClaudeAdapter:
             observer=observer,
             stop=stop,
             timeout=timeout,
+            total_timeout_seconds=total_timeout_seconds,
             parse_event=_parse_event,
             runner=self.runner,
             env=environment if environment is not None else self.env,
@@ -155,6 +177,16 @@ class ClaudeAdapter:
             extract_failure=_extract_failure,
             extract_message=_extract_message,
         )
+
+
+def _local_app_arguments(argv: list[str], request: Any) -> str:
+    from .materialized import materialized_prompt
+
+    prompt, images = materialized_prompt(request.workspace)
+    if images:
+        raise ProviderFailure("Claude CLI image input is not enabled for the isolated application profile.", category=FailureCategory.INVALID_REQUEST)
+    argv.extend(["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "", "--disable-slash-commands"])
+    return prompt
 
 
 def _parse_event(

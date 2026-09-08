@@ -50,6 +50,7 @@ class ProviderCapabilities:
     tool_isolation: IsolationMode
     cooperative_stop: bool
     provider_persistence: bool
+    reasoning_efforts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ class ProviderRequest:
     environment: Mapping[str, str] | None = None
     inputs: tuple[ProviderInputFile, ...] = ()
     reasoning_effort: str | None = None
+    total_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ class ProviderResumeRequest:
     inputs: tuple[ProviderInputFile, ...] = ()
     model: str | None = None
     reasoning_effort: str | None = None
+    total_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)

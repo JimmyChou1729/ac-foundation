@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, TypeAlias
 
@@ -23,7 +24,7 @@ from .errors import InvalidRequestError, InvalidSchemaError
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 ModelTier: TypeAlias = Literal["low", "medium", "high", "xhigh"]
-ReasoningEffort: TypeAlias = Literal["low", "medium", "high", "xhigh"]
+ReasoningEffort: TypeAlias = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
 REQUEST_SCHEMA_VERSION = "ac.llm.request.v4"
 RESUME_SCHEMA_VERSION = "ac.llm.resume_input.v3"
@@ -33,6 +34,7 @@ DEFAULT_MAX_PARALLEL_PROVIDER_CALLS = 100
 class LLMExecutionProfile(StrEnum):
     STANDARD = "standard"
     BOUNDED = "bounded"
+    LOCAL_APP = "local_app"
 
 
 def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -69,6 +71,10 @@ class ModelSelection:
     reasoning_effort: ReasoningEffort | None = None
 
     def __post_init__(self) -> None:
+        if self.reasoning_effort is not None and self.reasoning_effort not in {
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        }:
+            raise InvalidRequestError("Unsupported reasoning_effort.")
         if not self.provider or not isinstance(self.provider, str):
             raise InvalidRequestError("model.provider must be a non-empty string.")
         if self.tier not in {"low", "medium", "high", "xhigh"}:
@@ -81,27 +87,20 @@ class ModelSelection:
             raise InvalidRequestError("An exact model requires an explicit provider.")
         if self.model is not None and self.tier != "medium":
             raise InvalidRequestError("An exact model and a non-default tier are mutually exclusive.")
-        if self.reasoning_effort not in {None, "low", "medium", "high", "xhigh"}:
-            raise InvalidRequestError(
-                "model.reasoning_effort must be null, low, medium, high, or xhigh."
-            )
 
 
 @dataclass(frozen=True)
 class ExecutionLimits:
     idle_timeout_seconds: float | None = None
+    total_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
-        if self.idle_timeout_seconds is None:
-            return
-        if (
-            isinstance(self.idle_timeout_seconds, bool)
-            or not isinstance(self.idle_timeout_seconds, (int, float))
-            or self.idle_timeout_seconds <= 0
-        ):
-            raise InvalidRequestError(
-                "idle_timeout_seconds must be null or positive."
-            )
+        import math
+        for name in ("idle_timeout_seconds", "total_timeout_seconds"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value <= 0):
+                raise InvalidRequestError(f"{name} must be null or finite positive.")
 
 
 @dataclass(frozen=True)
@@ -114,8 +113,11 @@ class ProviderGateOptions:
     minimum_available_memory_fraction: float | None = 0.10
     memory_poll_interval_seconds: float = 1.0
     memory_launch_interval_seconds: float = 0.25
+    shared_root: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.shared_root is not None:
+            object.__setattr__(self, "shared_root", Path(self.shared_root).resolve())
         if not isinstance(self.enabled, bool):
             raise InvalidRequestError("gate.enabled must be a boolean.")
         for name in ("global_limit", "circuit_failure_threshold"):
@@ -198,6 +200,16 @@ class LLMExecutionOptions:
             raise InvalidRequestError("runtime_environment must be AcRuntimeEnvironment.")
         object.__setattr__(self, "host_authority", authority)
         object.__setattr__(self, "runtime_environment", environment)
+        if self.profile is LLMExecutionProfile.LOCAL_APP:
+            object.__setattr__(self, "gate", replace(
+                self.gate, enabled=True, global_limit=min(self.gate.global_limit, 8),
+                provider_limits={name: min(limit, self.gate.global_limit, 8) for name, limit in self.gate.provider_limits.items()},
+            ))
+            object.__setattr__(self, "limits", ExecutionLimits(
+                min(self.limits.idle_timeout_seconds or 300, 300),
+                min(self.limits.total_timeout_seconds or 600, 600),
+            ))
+
 
 
 @dataclass(frozen=True)
@@ -425,7 +437,7 @@ def decode_request(document: Mapping[str, Any]) -> LLMRequest:
         },
         "request",
     )
-    if document["schema_version"] != REQUEST_SCHEMA_VERSION:
+    if document["schema_version"] not in {REQUEST_SCHEMA_VERSION, "ac.llm.request.v5"}:
         raise InvalidRequestError("Unsupported request schema_version.")
     output_doc = _object(document["output"], "output")
     kind = output_doc.get("kind")
@@ -501,6 +513,23 @@ def decode_request(document: Mapping[str, Any]) -> LLMRequest:
         session=session,
         inputs=tuple(inputs),
     )
+
+
+def model_selection_to_document(model: ModelSelection) -> dict[str, Any]:
+    result = {"provider": model.provider, "model": model.model, "tier": model.tier}
+    if model.reasoning_effort is not None:
+        result["reasoning_effort"] = model.reasoning_effort
+    return result
+
+
+def decode_model_selection(value: Mapping[str, Any], *, extended: bool = False) -> ModelSelection:
+    fields = {"provider", "model", "tier"}
+    if extended:
+        fields.add("reasoning_effort")
+    _require_exact(value, fields, "model")
+    if extended and value["reasoning_effort"] is None:
+        raise InvalidRequestError("Extended model selection requires reasoning_effort.")
+    return ModelSelection(value["provider"], value["model"], value["tier"], value.get("reasoning_effort"))
 
 
 def resume_input_to_document(value: ResumeInput) -> dict[str, Any]:

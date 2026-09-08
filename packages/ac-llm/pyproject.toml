@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ac-llm"
-version = "2.0.5"
+version = "2.1.0"
 description = "Reusable host LLM execution helpers for AC Foundation tools."
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,8 @@ Repository = "https://github.com/tririver/ac-foundation"
 Issues = "https://github.com/tririver/ac-foundation/issues"
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+test = ["pytest>=8.0", "httpx>=0.28,<1"]
+api = ["httpx>=0.28,<1"]
 
 [project.scripts]
 ac-llm = "ac_llm.cli:main"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from typing import Callable, Literal, cast
 
 from ac_jobs import (
     ArtifactRef,
@@ -117,6 +117,18 @@ class ProposerReviewerService:
     def __init__(self, llm: LLMTaskService) -> None:
         self.llm = llm
 
+    def completed_results(self, context: RunContext, *, execution_scope: str | None = None) -> BatchResult:
+        """Read completed loops without treating a partial batch as complete."""
+        execution_scope = normalize_execution_scope(execution_scope)
+        if context.recovery_epoch:
+            execution_scope = context.execution_id(execution_scope or "proposer-reviewer")
+        view = context.inspect_group(batch_group_id(execution_scope=execution_scope))
+        return BatchResult(schema_version=RESULT_SCHEMA_VERSION, loops=tuple(
+            _loop_result_from_document(unit.value)
+            for unit in view.units
+            if unit.status == "succeeded" and isinstance(unit.value, Mapping)
+        ))
+
     def execute(
         self,
         context: RunContext,
@@ -124,10 +136,13 @@ class ProposerReviewerService:
         *,
         options: ExecutionOptions,
         execution_scope: str | None = None,
+        continue_after_pause: Callable[[Paused], bool] | None = None,
     ) -> RunOutcome:
         validate_batch_request(request)
         validate_execution_options(options)
         execution_scope = normalize_execution_scope(execution_scope)
+        if context.recovery_epoch:
+            execution_scope = context.execution_id(execution_scope or "proposer-reviewer")
         artifacts = context.artifacts.scoped("proposer-reviewer")
         if execution_scope is not None:
             artifacts = artifacts.scoped(f"scopes/{execution_scope}")
@@ -241,6 +256,7 @@ class ProposerReviewerService:
             units,
             run_loop,
             max_workers=options.max_concurrent_loops,
+            continue_after_pause=continue_after_pause,
             failure_mode=(
                 FailureMode.FAIL_FAST
                 if request.failure_policy is BatchFailurePolicy.FAIL_FAST
@@ -478,6 +494,7 @@ class ProposerReviewerService:
                     worker_id=worker.worker_id,
                     execution_scope=execution_scope,
                 )
+                context.checkpoint()
                 if isinstance(outcome, LLMPaused):
                     paused = _outer_pause(
                         outcome,
@@ -736,6 +753,7 @@ class ProposerReviewerService:
                 worker_id=loop.reviewer.worker_id,
                 execution_scope=execution_scope,
             )
+            context.checkpoint()
             if isinstance(reviewer_outcome, LLMPaused):
                 paused = _outer_pause(
                     reviewer_outcome,

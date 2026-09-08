@@ -108,6 +108,8 @@ def test_executor_passes_reasoning_effort_to_the_provider_request(
     adapter,
     registry,
 ) -> None:
+    capabilities = adapter.capabilities()
+    adapter.capabilities = lambda: replace(capabilities, reasoning_efforts=("high",))
     adapter.steps.append(_completed({"answer": 1}))
     request = replace(
         _request("reasoning-effort"),

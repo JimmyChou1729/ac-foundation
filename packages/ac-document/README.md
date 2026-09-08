@@ -83,6 +83,14 @@ place are rewritten and recorded in the export manifest.
 manifest and verify the staged `source.html` and each referenced resource before
 use.
 
+`HTMLSourceAcquisitionService.fetch_resource()` exposes the same public-HTTPS,
+DNS-pinning, redirect and byte-limit checks for an explicitly acquired document
+resource. The caller validates its media type and owns format routing; fetching
+does not infer that a DOI landing page is full text. An already fetched HTML
+response can pass through `materialize_response()` to acquire dependencies and
+cache its source bundle without fetching the primary again. Local parsing still
+does not perform network acquisition.
+
 ## RichDocument list ancestry
 
 RichDocument v3 keeps authored list content as flat, independently addressable
@@ -100,6 +108,15 @@ Existing v2 documents remain decodable and
 round-trip as v2 with no `list_path`; reparsing is required to migrate them to
 v3 and changes the document digest, so document-bound derived artifacts must be
 rebuilt.
+
+LaTeXML HTML author groups remain structured when preceded by a subtitle.
+An explicit email after an unresolved `\\corrauth` marker is separated from the
+name; this does not infer corresponding-author status. Unresolved markup and
+empty email fields produce parsing warnings. Native tables and LaTeXML
+`span.ltx_tabular` grids inside table figures retain cells, math, captions and
+source targets. Visible tables with unsupported geometry retain plain content and diagnostics;
+uncovered visible content remains a parsing error. Acknowledgement
+wrapper links resolve to their represented child content.
 
 ## Authored front matter and notes
 
@@ -258,6 +275,11 @@ If one authored Figure wrapper owns multiple direct captions, the producer
 does not guess a caption-to-panel association. It emits every media and caption
 inline flow in original DOM order as source-preserving blocks and records a
 `figure_layout` diagnostic; caption math, links, and marks remain structured.
+
+A flex cell may also wrap its single graphic in a captionless
+`figure.ltx_figure.ltx_figure_panel`. The graphic retains its own ID and dimensions;
+the wrapper must contain exactly that graphic and no visible prose or caption.
+This accommodates LaTeXML panel containers without flattening separate captions.
 
 Recognized Figure panels preserve positive bounded integer `width`/`height`
 attributes and a reduced positive `style:aspect-ratio` pair with closed

@@ -238,8 +238,24 @@ def _private_runtime_environment(
 
 def _source_selection(lock: RuntimeLock) -> tuple[str, dict[str, Path] | None]:
     requested = os.environ.get("AC_INSTALL_SOURCE", "auto")
-    if requested not in {"auto", "local", "git"}:
-        raise RuntimeConfigError("AC_INSTALL_SOURCE must be auto, local, or git")
+    if requested not in {"auto", "local", "git", "mixed"}:
+        raise RuntimeConfigError("AC_INSTALL_SOURCE must be auto, local, git, or mixed")
+    if requested == "mixed":
+        roots: dict[str, Path] = {}
+        for source in lock.sources:
+            value = os.environ.get(source.local_root_env)
+            if value is None:
+                continue
+            if not value.strip():
+                raise RuntimeConfigError(f"mixed install root {source.local_root_env} is empty")
+            root = Path(value).expanduser().resolve()
+            for package in source.packages:
+                if not (root / "packages" / package / "pyproject.toml").is_file():
+                    raise RuntimeConfigError(
+                        f"mixed install root {source.local_root_env} lacks packages/{package}/pyproject.toml"
+                    )
+            roots[source.source_id] = root
+        return "mixed", roots
     roots = _local_roots(lock)
     if requested == "local" and roots is None:
         missing = ", ".join(source.local_root_env for source in lock.sources)
@@ -304,7 +320,9 @@ def _fingerprint(
             "commit": source.commit,
             "packages": source.packages,
         }
-        if roots is not None:
+        if mode == "mixed":
+            source_identity["mode"] = "local" if roots and source.source_id in roots else "git"
+        if roots is not None and source.source_id in roots:
             root = roots[source.source_id]
             source_identity.update(
                 root=str(root),
@@ -403,7 +421,7 @@ class InstallLock:
 def _requirements(lock: RuntimeLock, mode: str, roots: dict[str, Path] | None) -> list[str]:
     requirements: list[str] = []
     for source in lock.sources:
-        if mode == "local":
+        if mode == "local" or (mode == "mixed" and roots is not None and source.source_id in roots):
             assert roots is not None
             requirements.extend(
                 str(roots[source.source_id] / "packages" / package)

@@ -19,7 +19,7 @@ jobs:
       - run: >-
           python -m pip install
           -e packages/ac-jobs
-          -e packages/ac-llm
+          -e "packages/ac-llm[test]"
           -e packages/ac-document
           -e packages/ac-proposer-reviewer
       - run: python -m pytest --import-mode=importlib packages/*/tests tests

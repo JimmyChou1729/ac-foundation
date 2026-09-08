@@ -477,10 +477,12 @@ def test_timeout_terminates_descendant_after_group_leader_exits(
         "import subprocess,sys,time\n"
         "from pathlib import Path\n"
         "base=Path(sys.argv[1])\n"
+        "print('starting',flush=True)\n"
         "process=subprocess.Popen([sys.executable,'-c',sys.argv[2],str(base)])\n"
         "deadline=time.monotonic()+2\n"
         "while not base.with_suffix('.ready').exists():\n"
         " assert time.monotonic()<deadline\n"
+        " print('waiting',flush=True)\n"
         " time.sleep(0.005)\n"
         "print(process.pid,flush=True)\n"
     )
@@ -535,3 +537,29 @@ def test_timeout_force_kills_term_ignoring_descendant_after_leader_exit(
         )
     assert caught.value.category is FailureCategory.TIMEOUT
     assert time.monotonic() - started < 1.5
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+def test_stop_survives_denied_group_liveness_probe(monkeypatch, tmp_path):
+    import signal
+    real_killpg = os.killpg
+    probes = []
+    def restricted_killpg(pid, sig):
+        if sig == 0:
+            probes.append(pid)
+            raise PermissionError("signal-0 probe denied")
+        return real_killpg(pid, sig)
+    monkeypatch.setattr(os, "killpg", restricted_killpg)
+    ready = []
+    def stop_check():
+        if ready:
+            raise StoppedError("requested stop")
+    with pytest.raises(StoppedError):
+        ProcessRunner().run(
+            [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready',flush=True); time.sleep(20)"],
+            stdin=b"", env=None, cwd=tmp_path, idle_timeout_seconds=5,
+            stop_check=stop_check, on_stdout=lambda chunk: ready.append(chunk),
+        )
+    assert probes
+    with pytest.raises(ProcessLookupError):
+        real_killpg(probes[0], 0)

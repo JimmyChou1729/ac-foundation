@@ -103,3 +103,10 @@ From the repository root:
 ```bash
 python -m pytest packages/ac-jobs/tests
 ```
+
+`RunContext.run_group(..., continue_after_pause=predicate)` can keep admitting
+independent units after a caller-classified local pause. The default remains to
+stop admission on any pause. Shared pauses take precedence in the returned
+outcome; paused units are not persisted as completed, while successful neighbors
+remain reusable on resume. The predicate must not classify missing authority or
+shared-service failures as local content failures.

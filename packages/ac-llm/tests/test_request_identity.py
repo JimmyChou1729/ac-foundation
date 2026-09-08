@@ -200,7 +200,7 @@ def test_model_constraints_and_json_booleans_are_strict() -> None:
     with pytest.raises(InvalidRequestError):
         ModelSelection("codex", "exact", "high")
     with pytest.raises(InvalidRequestError):
-        ModelSelection("codex", reasoning_effort="max")  # type: ignore[arg-type]
+        ModelSelection("codex", reasoning_effort="invalid")  # type: ignore[arg-type]
     with pytest.raises(InvalidRequestError):
         LLMExecutionOptions(internet="false")  # type: ignore[arg-type]
     with pytest.raises(InvalidRequestError):

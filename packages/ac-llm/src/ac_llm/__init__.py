@@ -27,6 +27,11 @@ from .errors import (
     ResumeInputConflictError,
     ResumeKeyMismatchError,
 )
+from .model_catalog import (
+    ProviderModel,
+    ProviderModelCatalog,
+    codex_model_catalog,
+)
 from .host import (
     AcRuntimeEnvironment,
     EffectiveHostMode,
@@ -91,7 +96,7 @@ from .workflow_support import (
     semantic_retry_request,
 )
 
-__version__ = "2.0.5"
+__version__ = "2.1.0"
 
 __all__ = [
     "DEFAULT_MAX_PARALLEL_PROVIDER_CALLS",
@@ -147,6 +152,8 @@ __all__ = [
     "ProviderDiagnostic",
     "ProviderExecution",
     "ProviderFailure",
+    "ProviderModel",
+    "ProviderModelCatalog",
     "ProviderGateOptions",
     "ProviderInputFile",
     "ProviderRegistry",
@@ -171,6 +178,7 @@ __all__ = [
     "request_to_document",
     "resume_input_matches",
     "resume_input_to_document",
+    "codex_model_catalog",
     "run_error_from_failure",
     "semantic_retry_request",
 ]

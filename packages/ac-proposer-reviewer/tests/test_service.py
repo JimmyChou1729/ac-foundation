@@ -1425,3 +1425,39 @@ def test_terminal_proposer_pause_resumes_without_a_terminal_reviewer(
     terminal = read_batch_round(repository, "run-a", loop.loop_id, 3)
     assert terminal.review is None
     assert terminal.proposals == {"loop-a-p": {"proposal": "terminal-resumed"}}
+
+
+def test_failed_run_recovery_uses_fresh_worker_sessions(tmp_path):
+    repository, context = _direct_context(tmp_path)
+    fake = FakeLLM()
+    service = ProposerReviewerService(fake)
+    request = _request(_loop())
+    assert isinstance(service.execute(context, request, options=ExecutionOptions()), Succeeded)
+    old_ids = {r.task_id for r in fake.requests}
+    snapshot = replace(repository.inspect("parent").snapshot, recovery_epoch=1)
+    recovered = RunContext(repository, snapshot, resume_input=None)
+    new_fake = FakeLLM()
+    result = ProposerReviewerService(new_fake).execute(recovered, request, options=ExecutionOptions())
+    assert isinstance(result, Succeeded)
+    assert len(new_fake.requests) == 2
+    assert all(r.session is None for r in new_fake.requests)
+    assert old_ids.isdisjoint(r.task_id for r in new_fake.requests)
+
+
+@pytest.mark.parametrize('role', ['proposer', 'reviewer'])
+def test_stop_wins_over_simultaneous_worker_failure(tmp_path, role):
+    class StopFailure(FakeLLM):
+        stopped = False
+        def execute(self, context, request, *, options):
+            matches = _is_proposer(request) == (role == 'proposer')
+            if matches and not self.stopped:
+                self.stopped = True
+                context.repository.request_stop(context.run_id, reason='test stop')
+                return LLMFailed(InvalidRequestError('failure racing with stop'))
+            return super().execute(context, request, options=options)
+    fake = StopFailure()
+    repo, handler, first = _run(tmp_path, _request(_loop()), fake)
+    assert first.status is RunStatus.PAUSED
+    resumed = RunEngine(repo).resume(first.run_id, handler)
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert _result(repo, resumed).loops[0].error is None

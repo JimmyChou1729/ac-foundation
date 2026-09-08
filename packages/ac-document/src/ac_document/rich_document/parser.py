@@ -1175,6 +1175,13 @@ def _html_visible_body_events(
             if child.name in _HTML_IGNORED_NAMES:
                 flush()
                 continue
+            if _html_is_pubnotes(child):
+                flush()
+                continue
+            if "ltx_authors" in _html_classes(child):
+                flush()
+                events.append(_HTMLFallback(locator_node=child, values=(child,)))
+                continue
             if _html_is_block_node(child):
                 flush()
                 events.append(child)
@@ -1263,6 +1270,14 @@ def _html_visible_ownership_units(
                 continue
             if child.name in _HTML_IGNORED_NAMES:
                 flush()
+                continue
+            if _html_is_pubnotes(child):
+                flush()
+                continue
+            if "ltx_authors" in _html_classes(child):
+                flush()
+                if _html_values_have_visible_content([child]):
+                    add(child, kind="content", output=content)
                 continue
             if _html_is_block_node(child):
                 flush()
@@ -1558,6 +1573,12 @@ def _html_front_matter_entry(
         if len(people) != 1:
             return None
         person = people[0]
+        correspondence_markers = [
+            value
+            for value in person.find_all(class_=True)
+            if "ltx_error" in _html_classes(value)
+            and value.get_text(strip=True) == r"\corrauth"
+        ]
         markers = [
             _html_visible_text(marker)
             for marker in person.find_all("sup", recursive=False)
@@ -1566,13 +1587,30 @@ def _html_front_matter_entry(
         name = _html_text_excluding(
             person,
             lambda value: value.name == "sup"
-            or "ltx_orcid" in {
-                str(class_name).casefold()
-                for class_name in value.get("class") or ()
-            },
+            or any(value is marker for marker in correspondence_markers)
+            or "ltx_orcid"
+            in {str(class_name).casefold() for class_name in value.get("class") or ()},
         )
         if not name:
             return None
+        embedded_email = None
+        if correspondence_markers:
+            tail = correspondence_markers[-1].next_sibling
+            match = (
+                re.fullmatch(
+                    r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+                    str(tail).strip(),
+                )
+                if isinstance(tail, NavigableString)
+                else None
+            )
+            if (
+                match
+                and name.endswith(match.group(1))
+                and name[: -len(match.group(1))].strip()
+            ):
+                embedded_email = match.group(1)
+                name = name[: -len(embedded_email)].strip()
         orcid_links = [
             link
             for link in creator.find_all(
@@ -1590,9 +1628,7 @@ def _html_front_matter_entry(
             return None
         orcid_link = orcid_links[0] if orcid_links else None
         orcid_url = (
-            str(orcid_link.get("href") or "")
-            if isinstance(orcid_link, Tag)
-            else ""
+            str(orcid_link.get("href") or "") if isinstance(orcid_link, Tag) else ""
         )
         orcid = (
             orcid_url.removeprefix("https://orcid.org/")
@@ -1613,8 +1649,7 @@ def _html_front_matter_entry(
             is creator
             and "ltx_role_orcid"
             not in {
-                str(class_name).casefold()
-                for class_name in contact.get("class") or ()
+                str(class_name).casefold() for class_name in contact.get("class") or ()
             }
         ]
         contacts = []
@@ -1622,17 +1657,14 @@ def _html_front_matter_entry(
         affiliation_references: dict[int, str] = {}
         for contact in contact_nodes:
             classes = {
-                str(class_name).casefold()
-                for class_name in contact.get("class") or ()
+                str(class_name).casefold() for class_name in contact.get("class") or ()
             }
             label_node = contact.find(
                 class_=lambda value: value
                 and "ltx_contact_name" in str(value).casefold().split()
             )
             label = (
-                _html_visible_text(label_node)
-                if isinstance(label_node, Tag)
-                else ""
+                _html_visible_text(label_node) if isinstance(label_node, Tag) else ""
             )
             if "ltx_role_affiliation" in classes:
                 marker_node = contact.find("sup")
@@ -1666,9 +1698,7 @@ def _html_front_matter_entry(
                     }
                     affiliation_by_key[key] = affiliation
                     affiliations.append(affiliation)
-                affiliation_references[id(contact)] = str(
-                    affiliation["affiliation_id"]
-                )
+                affiliation_references[id(contact)] = str(affiliation["affiliation_id"])
                 continue
             role = next(
                 (
@@ -1692,10 +1722,19 @@ def _html_front_matter_entry(
                     "label": label,
                     "value": contact_value,
                     "target": (
-                        str(link.get("href") or "")
-                        if isinstance(link, Tag)
-                        else ""
+                        str(link.get("href") or "") if isinstance(link, Tag) else ""
                     ),
+                }
+            )
+        embedded_contact_index = None
+        if embedded_email:
+            embedded_contact_index = len(contacts)
+            contacts.append(
+                {
+                    "kind": "email",
+                    "label": "",
+                    "value": embedded_email,
+                    "target": "mailto:" + embedded_email,
                 }
             )
         source_id = str(creator.get("id") or "")
@@ -1762,6 +1801,27 @@ def _html_front_matter_entry(
             )
         if not slots or slots[0]["kind"] != "author":
             return None
+        if embedded_contact_index is not None:
+            slots.insert(
+                1,
+                {
+                    "slot_id": "front-creator-slot-"
+                    + _html_structural_identity(
+                        artifact, person, role="front-person-email-slot"
+                    ).rsplit("-", 1)[1],
+                    "ordinal": 1,
+                    "kind": "contact",
+                    "locator": _locator_to_document(
+                        _html_locator(
+                            correspondence_markers[-1], artifact.source_format
+                        )
+                    ),
+                    "contact_index": embedded_contact_index,
+                    "affiliation_id": "",
+                },
+            )
+            for index, slot in enumerate(slots):
+                slot["ordinal"] = index
         creator_flow.append(
             {
                 "creator_id": _html_structural_identity(
@@ -1785,16 +1845,12 @@ def _html_front_matter_entry(
         ),
         "kind": "authors",
         "block_index": block_index,
-        "locator": _locator_to_document(
-            _html_locator(node, artifact.source_format)
-        ),
+        "locator": _locator_to_document(_html_locator(node, artifact.source_format)),
         "authors": authors,
         "affiliations": affiliations,
         "creator_flow": {
             "creator_count": len(creator_flow),
-            "slot_count": sum(
-                len(creator["slots"]) for creator in creator_flow
-            ),
+            "slot_count": sum(len(creator["slots"]) for creator in creator_flow),
             "creators": creator_flow,
         },
     }
@@ -1845,6 +1901,12 @@ def _parse_html(
 ) -> _HTMLParseResult:
     soup = BeautifulSoup(text, "html.parser")
     roots = html_roots(soup)
+    source_errors = [node for root in roots for node in root.find_all(class_=True) if "ltx_error" in _html_classes(node)]
+    if source_errors:
+        warn(f"source HTML contains {len(source_errors)} unresolved LaTeXML markup item(s)")
+    empty_emails = [node for root in roots for node in root.select(".ltx_role_email") if node.find("a", href="mailto:") is not None and not node.find("a", href="mailto:").get_text(strip=True)]
+    if empty_emails:
+        warn(f"source HTML contains {len(empty_emails)} empty email field(s); empty contacts are not displayed")
     ledger = _ProjectionLedger()
     content_units, exclusion_units = _html_visible_ownership_units(
         soup,
@@ -2314,6 +2376,11 @@ def _parse_html(
             if len(indexes) == 1:
                 owner_indexes.add(indexes[0])
             owner = owner.parent if isinstance(owner.parent, Tag) else None
+        if not owner_indexes and "ltx_acknowledgements" in _html_classes(target):
+            descendants = {str(value.get("id") or "") for value in target.find_all(id=True)}
+            matches = [index for source_id in descendants for index in raw_indexes_by_source_id.get(source_id, ())]
+            if matches:
+                owner_indexes.add(min(matches))
         if len(owner_indexes) != 1:
             continue
         block_index = next(iter(owner_indexes))
@@ -3021,6 +3088,21 @@ def _html_figure_block(
     ledger: _ProjectionLedger | None = None,
 ) -> _RawBlock | None:
     media_nodes = _html_figure_media_nodes(node)
+    if _html_figure_has_unrepresented_content(node):
+        _record_projection(ledger, category="figure_layout", locator=locator,
+                           status="neutral", fallback="plain_block",
+                           evidence="unrepresented_figure_content")
+        return None
+    caption = _html_owned_caption(node, "figcaption") if node.name == "figure" else None
+    if caption is not None and len(media_nodes) > 1:
+        try:
+            _html_caption_presentation(kind="figure", container=node, caption=caption,
+                                       content_nodes=media_nodes)
+        except ValueError:
+            _record_projection(ledger, category="caption_presentation", locator=locator,
+                               status="neutral", fallback="plain_block",
+                               evidence="invalid_exact_caption_presentation")
+            return None
     if not media_nodes:
         try:
             _html_figure_presentation(node, media_nodes=(), panels=())
@@ -3281,8 +3363,20 @@ def _html_figure_media_nodes(node: Tag) -> tuple[Tag, ...]:
         return (node,)
     output = []
     for media in node.find_all(["object", "img"]):
-        if not isinstance(media, Tag) or media.find_parent("figure") is not node:
+        if not isinstance(media, Tag):
             continue
+        owner = media.find_parent("figure")
+        if owner is not node:
+            if not (
+                isinstance(owner, Tag)
+                and _html_wrapped_panel_graphic(owner) is media
+                and isinstance(owner.parent, Tag)
+                and "ltx_flex_cell" in _html_classes(owner.parent)
+                and isinstance(owner.parent.parent, Tag)
+                and "ltx_flex_figure" in _html_classes(owner.parent.parent)
+                and owner.parent.parent.parent is node
+            ):
+                continue
         if media.name == "img" and isinstance(media.find_parent("object"), Tag):
             continue
         output.append(media)
@@ -3493,10 +3587,13 @@ def _html_flex_figure_presentation(
             raise ValueError("Figure panel layout has an ambiguous flex size")
         current_size_sources.append(f"class:{next(iter(size_classes))}")
         owned = [child for child in child.children if isinstance(child, Tag)]
-        if len(owned) != 1 or owned[0].name not in {"img", "object"}:
+        wrapped = _html_wrapped_panel_graphic(owned[0]) if len(owned) == 1 else None
+        if len(owned) != 1 or (
+            owned[0].name not in {"img", "object"} and wrapped is None
+        ):
             raise ValueError("Figure panel layout cell does not own one graphic")
-        graphic = owned[0]
-        if not {
+        graphic = wrapped if wrapped is not None else owned[0]
+        if wrapped is None and not {
             "ltx_graphics",
             "ltx_figure_panel",
         }.issubset(_html_classes(graphic)):
@@ -5776,3 +5873,46 @@ __all__ = [
     "parse_rich_artifact_bytes",
     "resolve_local_asset_path",
 ]
+
+
+def _html_wrapped_panel_graphic(node: Tag) -> Tag | None:
+    """Recognize a captionless LaTeXML panel wrapper without discarding content."""
+    if node.name != "figure" or not {
+        "ltx_figure",
+        "ltx_figure_panel",
+    }.issubset(_html_classes(node)):
+        return None
+    children = [child for child in node.children if isinstance(child, Tag)]
+    if (
+        len(children) != 1
+        or children[0].name not in {"img", "object"}
+        or "ltx_graphics" not in _html_classes(children[0])
+        or any(
+            isinstance(child, NavigableString)
+            and not isinstance(child, Comment)
+            and str(child).strip()
+            for child in node.children
+        )
+    ):
+        return None
+    return children[0]
+
+
+def _html_figure_has_unrepresented_content(node: Tag) -> bool:
+    for content in node.find_all(["svg", "math", "video", "audio", "canvas", "iframe"]):
+        if not any(
+            isinstance(parent, Tag) and parent.name in {"figcaption", "object"}
+            for parent in content.parents
+        ):
+            return True
+    return any(
+        str(text).strip()
+        and not isinstance(text, Comment)
+        and not any(
+            isinstance(parent, Tag) and parent.name in {
+                "figcaption", "object", "script", "style",
+            }
+            for parent in text.parents
+        )
+        for text in node.find_all(string=True)
+    )
