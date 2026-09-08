@@ -43,4 +43,9 @@ def default_registry() -> ProviderRegistry:
     registry.register("claude", ClaudeAdapter)
     registry.register("kimi", KimiAdapter)
     registry.register("dsh", DshAdapter)
+    import os
+    configured = os.environ.get("AC_LLM_PROVIDER_CONFIG")
+    if configured:
+        from ..provider_settings import register_configured_providers
+        register_configured_providers(registry, configured)
     return registry

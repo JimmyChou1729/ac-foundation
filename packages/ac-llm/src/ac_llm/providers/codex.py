@@ -15,6 +15,7 @@ from ._cli import (
     classify_provider_failure_evidence,
     executable_diagnostic,
     run_cli,
+    validate_local_app_environment,
 )
 from .base import (
     IsolationMode,
@@ -55,6 +56,7 @@ class CodexAdapter:
             tool_isolation=IsolationMode.EXPLICIT,
             cooperative_stop=True,
             provider_persistence=True,
+            reasoning_efforts=("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
         )
 
     def doctor(self) -> ProviderDiagnostic:
@@ -62,13 +64,25 @@ class CodexAdapter:
         return ProviderDiagnostic(self.name, available, path)
 
     def start(self, request: ProviderRequest, observer: Any, stop: Any) -> ProviderExecution:
+        prompt = request.prompt
         argv = [
             self.binary,
             "exec",
             "--json",
             "--skip-git-repo-check",
         ]
-        if request.capabilities.get("execution_profile") == "bounded":
+        if request.capabilities.get("execution_profile") == "local_app":
+            validate_local_app_environment(
+                self.name, request.environment if request.environment is not None else self.env
+            )
+            from .materialized import materialized_prompt
+
+            prompt, _ = materialized_prompt(request.workspace)
+            argv.extend(["--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "-c", "default_tools_enabled=false", "--disable", "multi_agent"])
+            for item in request.inputs:
+                if item.media_type.startswith("image/"):
+                    argv.extend(["--image", str(item.path)])
+        elif request.capabilities.get("execution_profile") == "bounded":
             argv.extend(
                 [
                     "--ignore-user-config",
@@ -99,13 +113,14 @@ class CodexAdapter:
         argv.append("-")
         return self._run(
             argv,
-            request.prompt,
+            prompt,
             request.output_schema,
             request.idle_timeout_seconds,
             request.workspace,
             request.environment,
             observer,
             stop,
+            total_timeout_seconds=getattr(request, "total_timeout_seconds", None),
             has_image_inputs=any(
                 item.media_type.startswith("image/") for item in request.inputs
             ),
@@ -123,6 +138,7 @@ class CodexAdapter:
         stop: Any,
         *,
         has_image_inputs: bool = False,
+        total_timeout_seconds: float | None = None,
     ) -> ProviderExecution:
         schema_path: Path | None = None
         output_path: Path | None = None
@@ -162,6 +178,7 @@ class CodexAdapter:
                 observer=observer,
                 stop=stop,
                 timeout=timeout,
+            total_timeout_seconds=total_timeout_seconds,
                 parse_event=_parse_event,
                 runner=self.runner,
                 env=environment if environment is not None else self.env,
@@ -224,6 +241,7 @@ class CodexAdapter:
         observer: Any,
         stop: Any,
     ) -> ProviderExecution:
+        prompt = request.prompt
         argv = [
             self.binary,
             "exec",
@@ -231,7 +249,18 @@ class CodexAdapter:
             "--json",
             "--skip-git-repo-check",
         ]
-        if request.capabilities.get("execution_profile") == "bounded":
+        if request.capabilities.get("execution_profile") == "local_app":
+            validate_local_app_environment(
+                self.name, request.environment if request.environment is not None else self.env
+            )
+            from .materialized import materialized_prompt
+
+            prompt, _ = materialized_prompt(request.workspace)
+            argv.extend(["--ignore-user-config", "--ignore-rules", "-c", 'sandbox_mode="read-only"', "-c", "default_tools_enabled=false", "--disable", "multi_agent"])
+            for item in request.inputs:
+                if item.media_type.startswith("image/"):
+                    argv.extend(["--image", str(item.path)])
+        elif request.capabilities.get("execution_profile") == "bounded":
             argv.extend(
                 [
                     "--ignore-user-config",
@@ -265,13 +294,14 @@ class CodexAdapter:
         argv.extend([handle.value, "-"])
         return self._run(
             argv,
-            request.prompt,
+            prompt,
             request.output_schema,
             request.idle_timeout_seconds,
             request.workspace,
             request.environment,
             observer,
             stop,
+            total_timeout_seconds=getattr(request, "total_timeout_seconds", None),
             has_image_inputs=any(
                 item.media_type.startswith("image/") for item in request.inputs
             ),

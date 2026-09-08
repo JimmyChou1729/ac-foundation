@@ -62,6 +62,7 @@ class ProcessRunner:
         cwd: Path,
         idle_timeout_seconds: float | None,
         stop_check: Callable[[], None],
+        total_timeout_seconds: float | None = None,
         on_stdout: Callable[[bytes], None] | None = None,
         on_stderr: Callable[[bytes], None] | None = None,
     ) -> ProcessResult:
@@ -123,7 +124,8 @@ class ProcessRunner:
             thread.start()
 
         closed: set[str] = set()
-        last_activity = time.monotonic()
+        started = time.monotonic()
+        last_activity = started
         last_activity_at = time.time()
         failure: BaseException | None = None
         try:
@@ -140,6 +142,10 @@ class ProcessRunner:
                         details={"code": "provider_pipe_failed"},
                     )
                     break
+                if total_timeout_seconds is not None and time.monotonic() - started >= total_timeout_seconds:
+                    failure = ProviderFailure("Provider exceeded the total execution timeout.",
+                        category=FailureCategory.TIMEOUT, details={"code": "provider_total_timeout"})
+                    break
                 remaining = None
                 if idle_timeout_seconds is not None:
                     remaining = idle_timeout_seconds - (
@@ -148,7 +154,7 @@ class ProcessRunner:
                     if remaining <= 0:
                         failure = ProviderFailure(
                             "Provider produced no activity before the idle timeout.",
-                            category=FailureCategory.TIMEOUT,
+                            category=FailureCategory.TIMEOUT, details={"code": "provider_idle_timeout"},
                         )
                         break
                 try:
@@ -266,6 +272,7 @@ class ProcessRunner:
     @staticmethod
     def _terminate_posix_group(process: subprocess.Popen[bytes]) -> None:
         group_id = process.pid
+        process.poll()
         try:
             os.killpg(group_id, signal.SIGTERM)
         except ProcessLookupError:
@@ -278,6 +285,7 @@ class ProcessRunner:
         # contract exercised by the caller.
         deadline = time.monotonic() + 1.0
         while time.monotonic() < deadline:
+            process.poll()
             try:
                 os.killpg(group_id, 0)
             except ProcessLookupError:

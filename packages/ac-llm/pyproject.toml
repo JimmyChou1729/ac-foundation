@@ -29,6 +29,7 @@ Issues = "https://github.com/tririver/ac-foundation/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
+api = ["httpx>=0.28,<1"]
 
 [project.scripts]
 ac-llm = "ac_llm.cli:main"

@@ -201,6 +201,7 @@ def run_cli(
     runner: ProcessRunner,
     env: Mapping[str, str] | None,
     cwd: Path,
+    total_timeout_seconds: float | None = None,
     validate_terminal: bool = True,
     extract_failure: (
         Callable[[Mapping[str, Any]], ProviderFailure | None] | None
@@ -254,6 +255,7 @@ def run_cli(
             env=os.environ if env is None else env,
             cwd=cwd,
             idle_timeout_seconds=timeout,
+            **({"total_timeout_seconds": total_timeout_seconds} if total_timeout_seconds is not None else {}),
             stop_check=stop.raise_if_requested,
             on_stdout=stdout,
             on_stderr=stderr,
@@ -606,3 +608,18 @@ def _safe_progress(
     except Exception:
         # Observation must never abort an already-running paid provider call.
         return
+
+
+def validate_local_app_environment(provider: str, environment: Mapping[str, str] | None) -> None:
+    """Official-account execution must not inherit API routing or billing overrides."""
+    values = os.environ if environment is None else environment
+    forbidden = {
+        "codex": ("OPENAI_BASE_URL", "CODEX_BASE_URL", "OPENAI_API_KEY", "CODEX_API_KEY"),
+        "claude": ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                   "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"),
+    }[provider]
+    if any(values.get(key) for key in forbidden):
+        raise ProviderFailure(
+            "Local application CLI execution requires official account login without API environment overrides; configure an explicit API connection instead.",
+            category=FailureCategory.INVALID_REQUEST, retryable=False,
+        )

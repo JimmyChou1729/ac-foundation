@@ -703,8 +703,11 @@ class LLMTaskExecutor:
                 )
 
     def _call_start(
-        self, context: Any, request: LLMRequest, state: LLMTaskState, store: Any, adapter: Any, options: LLMExecutionOptions
+        self, context: Any, request: LLMRequest, state: LLMTaskState, store: Any, adapter: Any, options: LLMExecutionOptions,
+        *, continuation_prompt: str | None = None,
     ) -> ProviderExecution:
+        if request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
+            raise InvalidRequestError("The provider does not support the requested reasoning effort.")
         observer = self._observer(context, state, store)
         observer.progress(
             "llm_message",
@@ -714,7 +717,7 @@ class LLMTaskExecutor:
                 **message_preview(request.prompt),
             },
         )
-        workspace = self._prepare_workspace(context, request, state, options=options)
+        workspace = self._prepare_workspace(context, request, state, options=options, continuation_prompt=continuation_prompt)
         gate = self._provider_gate(context, options)
         with gate.acquire(
             adapter.name,
@@ -722,27 +725,31 @@ class LLMTaskExecutor:
             observe=lambda event, data: self._observe_gate(context, event, data),
         ) as permit:
             state = self._mark_attempt_started(state, store)
+            observer.progress("llm_call_started", {"model": state.resolved_model})
             try:
                 execution = adapter.start(
                     ProviderRequest(
                         prompt=self._workspace_prompt(),
                         model=state.resolved_model or "",
                         output_schema=self._provider_output_schema(request, options),
-                        capabilities=self._capability_document(options),
+                        capabilities={**self._capability_document(options), **({"reasoning_effort": request.model.reasoning_effort} if request.model.reasoning_effort is not None else {})},
                         idle_timeout_seconds=options.limits.idle_timeout_seconds,
                         workspace=workspace,
                         environment=options.runtime_environment.apply_to(),
                         inputs=self._provider_input_files(request),
                         reasoning_effort=request.model.reasoning_effort,
+                        total_timeout_seconds=options.limits.total_timeout_seconds,
                     ),
                     observer,
                     context.stop,
                 )
             except ProviderFailure as exc:
+                observer.progress("llm_provider_failed", {"category": exc.category.value})
                 permit.record_failure(exc)
                 self._emit_gate_record_warning(context, permit)
                 raise
             self._record_gate_execution(context, permit, execution)
+            self._record_usage(observer, request, execution)
             return self._with_gate_warnings(execution, permit)
 
     def _mark_attempt_started(self, state: LLMTaskState, store: Any) -> LLMTaskState:
@@ -771,6 +778,10 @@ class LLMTaskExecutor:
         prompt: str | None = None,
     ) -> ProviderExecution:
         handle = state.current.native_handle
+        if request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
+            raise InvalidRequestError("The provider does not support the requested reasoning effort.")
+        if not adapter.capabilities().native_resume:
+            return self._call_start(context, request, state, store, adapter, options, continuation_prompt=prompt)
         if handle is None:
             raise InvalidRequestError("Native continuation has no saved handle.")
         observer = self._observer(context, state, store)
@@ -799,29 +810,43 @@ class LLMTaskExecutor:
             observe=lambda event, data: self._observe_gate(context, event, data),
         ) as permit:
             state = self._mark_attempt_started(state, store)
+            observer.progress("llm_call_started", {"model": state.resolved_model})
             try:
                 execution = adapter.resume(
                     NativeResumeHandle(adapter.name, handle),
                     ProviderResumeRequest(
                         prompt=self._workspace_prompt(),
                         output_schema=self._provider_output_schema(request, options),
-                        capabilities=self._capability_document(options),
+                        capabilities={**self._capability_document(options), **({"reasoning_effort": request.model.reasoning_effort} if request.model.reasoning_effort is not None else {})},
                         idle_timeout_seconds=options.limits.idle_timeout_seconds,
                         workspace=workspace,
                         environment=options.runtime_environment.apply_to(),
                         inputs=self._provider_input_files(request),
                         model=state.resolved_model,
                         reasoning_effort=request.model.reasoning_effort,
+                        total_timeout_seconds=options.limits.total_timeout_seconds,
                     ),
                     observer,
                     context.stop,
                 )
             except ProviderFailure as exc:
+                observer.progress("llm_provider_failed", {"category": exc.category.value})
                 permit.record_failure(exc)
                 self._emit_gate_record_warning(context, permit)
                 raise
             self._record_gate_execution(context, permit, execution)
+            self._record_usage(observer, request, execution)
             return self._with_gate_warnings(execution, permit)
+
+    @staticmethod
+    def _record_usage(observer: Any, request: LLMRequest, execution: ProviderExecution) -> None:
+        from .usage import usage_document
+
+        observer.progress("llm_usage", {
+            "model": request.model.model,
+            "usage": usage_document(execution.usage, detail=execution.diagnostics.get("usage_detail")),
+            "terminal_kind": execution.terminal_kind.value,
+        })
 
     def _observer(self, context: Any, state: LLMTaskState, store: Any) -> DurableProviderObserver:
         def save_handle(handle: NativeResumeHandle) -> None:
@@ -842,10 +867,12 @@ class LLMTaskExecutor:
 
     @staticmethod
     def _provider_gate(context: Any, options: LLMExecutionOptions) -> ProviderCallGate:
-        return ProviderCallGate(
-            context.repository.root / "operational" / "llm",
-            options.gate,
-        )
+        root = options.gate.shared_root
+        if root is None:
+            owner = (context.run_directory if options.profile is LLMExecutionProfile.LOCAL_APP
+                     else context.repository.root)
+            root = owner / "operational" / "llm"
+        return ProviderCallGate(root, options.gate)
 
     def _record_gate_execution(
         self, context: Any, permit: Any, execution: ProviderExecution
@@ -3015,6 +3042,17 @@ class LLMTaskExecutor:
             "continuation_response": continuation_path,
             "provider_instructions": self._provider_instructions(request, options),
         }
+        if options.profile is LLMExecutionProfile.LOCAL_APP and state.host_turn_round:
+            scoped = self._artifacts(context, state.semantic_key)
+            history = []
+            for ordinal in range(1, state.host_turn_round + 1):
+                entry = {}
+                for kind in ("request", "continuation"):
+                    ref = scoped.find(f"host-turns/{ordinal}/{kind}.json")
+                    if ref is not None:
+                        entry[kind] = json.loads(scoped.read_bytes(ref).decode("utf-8"))
+                history.append(entry)
+            control["host_history"] = history
         self._publish_workspace_file(
             host_root / "control.json",
             canonical_json_bytes(control),
@@ -3278,6 +3316,7 @@ class LLMTaskExecutor:
             "schema_version": "ac.llm.operational_policy.v2",
             "limits": {
                 "idle_timeout_seconds": options.limits.idle_timeout_seconds,
+                **({"total_timeout_seconds": options.limits.total_timeout_seconds} if options.limits.total_timeout_seconds is not None else {}),
             },
             "gate": {
                 "enabled": options.gate.enabled,

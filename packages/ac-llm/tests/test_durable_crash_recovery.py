@@ -176,10 +176,12 @@ def test_provider_warning_survives_completed_result_replay(
         )
     )
     client = LLMClient(registry=registry)
+    from ac_llm import ProviderGateOptions
+
     options = LLMExecutionOptions(
+        gate=ProviderGateOptions(minimum_available_memory_fraction=None),
         host_authority=HostAuthority.UNRESTRICTED,
         internet=False,
-        gate=ProviderGateOptions(minimum_available_memory_fraction=None),
     )
     generated = client.generate(
         _request("warning-replay"),

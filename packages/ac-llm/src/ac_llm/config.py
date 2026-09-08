@@ -98,14 +98,11 @@ def resolve_model_selection(
             provider = detected
         else:
             provider = next((item for item in PROVIDERS if item in available), "")
-    if provider not in PROVIDERS:
+    if provider not in PROVIDERS and provider not in available:
         raise InvalidRequestError(f"Unknown provider: {provider or 'auto'}")
     if provider not in available:
         raise InvalidRequestError(f"Provider is unavailable: {provider}")
-    model = selection.model or DEFAULT_MODELS[provider][selection.tier]
-    return ResolvedModelSelection(
-        provider,
-        model,
-        selection.tier,
-        selection.reasoning_effort,
-    )
+    model = selection.model or DEFAULT_MODELS.get(provider, {}).get(selection.tier)
+    if not model:
+        raise InvalidRequestError("A custom provider requires an explicit model.")
+    return ResolvedModelSelection(provider, model, selection.tier, selection.reasoning_effort)

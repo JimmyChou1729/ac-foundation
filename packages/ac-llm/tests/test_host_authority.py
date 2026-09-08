@@ -979,10 +979,12 @@ def test_client_resume_replay_uses_the_supplied_runtime_options(
     adapter.steps.append(_direct_complete({"answer": 5}))
     client = LLMClient(registry=registry)
     request = _request("resume-options")
+    from ac_llm import ProviderGateOptions
+
     options = LLMExecutionOptions(
+        gate=ProviderGateOptions(minimum_available_memory_fraction=None),
         host_authority=HostAuthority.UNRESTRICTED,
         internet=False,
-        gate=ProviderGateOptions(minimum_available_memory_fraction=None),
     )
     generated = client.generate(request, run_root=tmp_path, options=options)
 
