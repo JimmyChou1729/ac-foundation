@@ -168,6 +168,7 @@ class WorkGroupRunner:
         failure_mode: FailureMode,
         worker_capacity: int | None = None,
         worker_target: Callable[[], int] | None = None,
+        continue_after_pause: Callable[[Paused], bool] | None = None,
     ) -> GroupExecutionResult:
         validate_simple_id(group_id, label="group id")
         if not isinstance(max_workers, int) or isinstance(max_workers, bool) or max_workers < 1:
@@ -311,6 +312,7 @@ class WorkGroupRunner:
         with ThreadPoolExecutor(max_workers=capacity) as executor:
             in_flight: dict[Future[UnitResult | Paused], WorkUnit] = {}
             pauses: dict[str, Paused] = {}
+            local_pauses: set[str] = set()
             while pending or in_flight:
                 self.checkpoint()
                 target = max_workers if worker_target is None else worker_target()
@@ -340,7 +342,10 @@ class WorkGroupRunner:
                     result = future.result()
                     if isinstance(result, Paused):
                         pauses[unit.unit_id] = result
-                        stop_submitting = True
+                        if continue_after_pause is not None and continue_after_pause(result):
+                            local_pauses.add(unit.unit_id)
+                        else:
+                            stop_submitting = True
                         continue
                     results[unit.unit_id] = result
                     if failure_mode is FailureMode.FAIL_FAST and result.status != "succeeded":
@@ -348,6 +353,9 @@ class WorkGroupRunner:
             # Context manager joins every submitted future before returning.
         self.stop.raise_if_requested()
         if pauses:
+            for unit in units:
+                if unit.unit_id in pauses and unit.unit_id not in local_pauses:
+                    return pauses[unit.unit_id]
             for unit in units:
                 if unit.unit_id in pauses:
                     return pauses[unit.unit_id]

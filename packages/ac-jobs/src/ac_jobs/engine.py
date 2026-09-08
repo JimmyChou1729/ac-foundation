@@ -780,6 +780,7 @@ class RunContext:
         *,
         max_workers: int,
         failure_mode: FailureMode,
+        continue_after_pause: Callable[[Paused], bool] | None = None,
     ) -> GroupExecutionResult:
         group_root = self.run_directory / "groups"
         current_root = (
@@ -816,6 +817,7 @@ class RunContext:
             worker,
             max_workers=max_workers,
             failure_mode=failure_mode,
+            continue_after_pause=continue_after_pause,
             worker_capacity=control.capacity,
             worker_target=lambda: (
                 read_group_workers(self.run_directory, group_id) or control
