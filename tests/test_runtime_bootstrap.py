@@ -252,3 +252,109 @@ def test_private_runtime_uses_scripts_directory_on_windows(
     assert RUNTIME._venv_tool(runtime, "ac-jobs") == (
         runtime / "venv/Scripts/ac-jobs.exe"
     )
+
+
+def _mixed_lock_and_product(tmp_path):
+    document = _lock()
+    document['sources'].append({
+        'id':'product', 'repository':'https://github.com/example/product.git',
+        'commit':'b'*40, 'packages':['product-package'], 'tools':['product-tool'],
+        'local_root_env':'AC_PRODUCT_REPO_ROOT',
+    })
+    path = tmp_path/'runtime-sources.json'
+    path.write_text(json.dumps(document))
+    product = tmp_path/'product'
+    package = product/'packages/product-package'
+    package.mkdir(parents=True)
+    (package/'pyproject.toml').write_text('[project]\nname="product-package"\nversion="1"\n')
+    return path, RUNTIME.load_lock(path), product
+
+
+def test_mixed_sources_preserve_locked_git_and_hash_local_content(tmp_path, monkeypatch):
+    path, lock, product = _mixed_lock_and_product(tmp_path)
+    monkeypatch.setenv('AC_INSTALL_SOURCE','mixed')
+    monkeypatch.setenv('AC_PRODUCT_REPO_ROOT',str(product))
+    monkeypatch.delenv('AC_FOUNDATION_REPO_ROOT',raising=False)
+    mode,roots = RUNTIME._source_selection(lock)
+    assert mode == 'mixed' and roots == {'product':product}
+    assert RUNTIME._requirements(lock,mode,roots) == [
+        'ac-jobs @ git+https://github.com/example/foundation.git@'+'a'*40+'#subdirectory=packages/ac-jobs',
+        str(product/'packages/product-package'),
+    ]
+    constraints = tmp_path/'absent-constraints'
+    first,identity = RUNTIME._fingerprint(path,lock,mode,roots,constraints)
+    assert identity['sources'][0]['mode'] == 'git'
+    assert 'root' not in identity['sources'][0] and 'content_sha256' not in identity['sources'][0]
+    assert identity['sources'][1]['mode'] == 'local'
+    assert identity['sources'][1]['root'] == str(product)
+    (product/'packages/product-package/module.py').write_text('value = 1\n')
+    second,_ = RUNTIME._fingerprint(path,lock,mode,roots,constraints)
+    assert first != second
+
+
+@pytest.mark.parametrize('bad', ['', 'missing'])
+def test_mixed_explicit_invalid_root_fails_instead_of_using_git(tmp_path, monkeypatch, bad):
+    _,lock,_ = _mixed_lock_and_product(tmp_path)
+    monkeypatch.setenv('AC_INSTALL_SOURCE','mixed')
+    monkeypatch.setenv('AC_PRODUCT_REPO_ROOT',str(tmp_path/bad) if bad else '')
+    monkeypatch.delenv('AC_FOUNDATION_REPO_ROOT',raising=False)
+    with pytest.raises(RUNTIME.RuntimeConfigError, match='AC_PRODUCT_REPO_ROOT'):
+        RUNTIME._source_selection(lock)
+
+
+def test_mixed_empty_roots_are_git_and_environment_handles_partial_roots(tmp_path, monkeypatch):
+    path,lock,product = _mixed_lock_and_product(tmp_path)
+    monkeypatch.setenv('AC_INSTALL_SOURCE','mixed')
+    for name in ('AC_PRODUCT_REPO_ROOT','AC_FOUNDATION_REPO_ROOT','AC_DOCUMENT_CACHE','AC_RUNTIME_HOME'):
+        monkeypatch.delenv(name,raising=False)
+    monkeypatch.setenv('AC_HOME',str(tmp_path/'home'))
+    monkeypatch.chdir(product)
+    mode,roots = RUNTIME._source_selection(lock)
+    assert roots == {} and mode == 'mixed'
+    assert all('git+' in req for req in RUNTIME._requirements(lock,mode,roots))
+    _,identity = RUNTIME._fingerprint(path,lock,mode,roots,tmp_path/'constraints')
+    assert all(source['mode'] == 'git' for source in identity['sources'])
+    assert RUNTIME._runtime_environment(lock,roots)['AC_DOCUMENT_CACHE'] == str(product/'.ac/cache/ac-document')
+    monkeypatch.delenv('AC_DOCUMENT_CACHE')
+    assert RUNTIME._runtime_environment(lock,{'product':product})['AC_DOCUMENT_CACHE'] == str(product/'local/cache/ac-document')
+
+
+@pytest.mark.parametrize('mode',['auto','local','git'])
+def test_original_source_modes_keep_complete_root_semantics(tmp_path, monkeypatch, mode):
+    path,lock,product = _mixed_lock_and_product(tmp_path)
+    monkeypatch.setenv('AC_INSTALL_SOURCE',mode)
+    monkeypatch.setenv('AC_PRODUCT_REPO_ROOT',str(product))
+    monkeypatch.delenv('AC_FOUNDATION_REPO_ROOT',raising=False)
+    if mode == 'local':
+        with pytest.raises(RUNTIME.RuntimeConfigError, match='complete roots'):
+            RUNTIME._source_selection(lock)
+    else:
+        assert RUNTIME._source_selection(lock) == ('git',None)
+    foundation = tmp_path/'foundation'
+    package = foundation/'packages/ac-jobs'
+    package.mkdir(parents=True)
+    (package/'pyproject.toml').write_text('[project]\nname="ac-jobs"\n')
+    monkeypatch.setenv('AC_FOUNDATION_REPO_ROOT',str(foundation))
+    selected,roots = RUNTIME._source_selection(lock)
+    assert selected == ('git' if mode == 'git' else 'local')
+    _,identity = RUNTIME._fingerprint(path,lock,selected,roots,tmp_path/'constraints')
+    assert all('mode' not in source for source in identity['sources'])
+    if selected == 'local':
+        assert set(roots) == {'foundation','product'}
+        assert all('git+' not in req for req in RUNTIME._requirements(lock,selected,roots))
+
+
+def test_mixed_allows_explicit_foundation_development_override(tmp_path, monkeypatch):
+    path,lock,product = _mixed_lock_and_product(tmp_path)
+    foundation = tmp_path/'foundation'
+    (foundation/'packages/ac-jobs').mkdir(parents=True)
+    (foundation/'packages/ac-jobs/pyproject.toml').write_text('[project]\nname="ac-jobs"\n')
+    monkeypatch.setenv('AC_INSTALL_SOURCE','mixed')
+    monkeypatch.setenv('AC_PRODUCT_REPO_ROOT',str(product))
+    monkeypatch.setenv('AC_FOUNDATION_REPO_ROOT',str(foundation))
+    mode,roots = RUNTIME._source_selection(lock)
+    assert mode == 'mixed' and roots == {'foundation':foundation, 'product':product}
+    assert RUNTIME._requirements(lock,mode,roots) == [
+        str(foundation/'packages/ac-jobs'), str(product/'packages/product-package')]
+    _,identity = RUNTIME._fingerprint(path,lock,mode,roots,tmp_path/'constraints')
+    assert all(source['mode'] == 'local' and source['content_sha256'] for source in identity['sources'])
