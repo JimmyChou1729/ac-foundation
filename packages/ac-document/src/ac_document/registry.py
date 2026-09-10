@@ -14,6 +14,10 @@ from .html_bundle import (
     html_source_bundle_to_document,
     materialize_html_source_bundle,
 )
+from .mineru import import_mineru_bundle
+from .mineru_runner import doctor_mineru, parse_pdf_mineru
+from .mineru_config import configure_mineru, doctor_configured_mineru, parse_pdf_configured_mineru
+from .pdf_source import verify_pdf_source_bundle
 from .operation_registry import (
     DEFAULT_EXCLUDED_EFFECTS,
     JsonCodec,
@@ -125,12 +129,14 @@ def _export_rich_document(
     validator: str | None = None,
     source_format: str | None = None,
     cache_root: str | None = None,
+    pdf_source_manifest: str | None = None,
 ) -> Any:
     return _service(cache_root).export_rich_document(
         source,
         output_dir=output_dir,
         validator=validator,
         source_format=source_format,
+        pdf_source_manifest=pdf_source_manifest,
     )
 
 
@@ -390,6 +396,7 @@ _OPERATIONS = (
                 "validator": _NULLABLE_STRING,
                 "source_format": _FORMAT,
                 "cache_root": _NULLABLE_STRING,
+                "pdf_source_manifest": _NULLABLE_STRING,
             },
             required=("source", "output_dir"),
         ),
@@ -397,6 +404,45 @@ _OPERATIONS = (
         effects=frozenset(
             {OperationEffect.CACHE_WRITE, OperationEffect.ARBITRARY_LOCAL_PATH}
         ),
+    ),
+    _spec("configure-mineru", object_schema({"config_path": _NONEMPTY_STRING, "executable": _NULLABLE_STRING, "api_url": _NULLABLE_STRING, "token_env": _NULLABLE_STRING, "language": {"enum": ["en", "ch"]}}, required=("config_path",)), configure_mineru, effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH})),
+    _spec("doctor-configured-mineru", object_schema({"config_path": _NONEMPTY_STRING}, required=("config_path",)), doctor_configured_mineru, effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH, OperationEffect.NETWORK})),
+    _spec("parse-pdf-configured-mineru", object_schema({"pdf": _NONEMPTY_STRING, "config_path": _NONEMPTY_STRING, "job_dir": _NONEMPTY_STRING, "timeout_seconds": {"type":"number", "exclusiveMinimum":0,"maximum":86400}}, required=("pdf","config_path","job_dir")), parse_pdf_configured_mineru, effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH, OperationEffect.NETWORK})),
+    _spec(
+        "doctor-mineru",
+        object_schema({"executable": _NULLABLE_STRING, "api_url": _NULLABLE_STRING, "token_env": _NULLABLE_STRING}),
+        doctor_mineru,
+        effects=frozenset({OperationEffect.NETWORK, OperationEffect.ARBITRARY_LOCAL_PATH}),
+    ),
+    _spec(
+        "parse-pdf-mineru",
+        object_schema({"pdf": _NONEMPTY_STRING, "job_dir": _NONEMPTY_STRING,
+                       "executable": _NULLABLE_STRING, "api_url": _NULLABLE_STRING,
+                       "token_env": _NULLABLE_STRING, "language": {"enum": ["en", "ch"]},
+                       "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400}},
+                      required=("pdf", "job_dir")),
+        parse_pdf_mineru,
+        effects=frozenset({OperationEffect.NETWORK, OperationEffect.ARBITRARY_LOCAL_PATH}),
+    ),
+    _spec(
+        "import-mineru-bundle",
+        object_schema(
+            {
+                "pdf": _NONEMPTY_STRING,
+                "content_list": _NONEMPTY_STRING,
+                "middle_json": _NONEMPTY_STRING,
+                "output_dir": _NONEMPTY_STRING,
+            },
+            required=("pdf", "content_list", "middle_json", "output_dir"),
+        ),
+        import_mineru_bundle,
+        effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH}),
+    ),
+    _spec(
+        "verify-pdf-source-bundle",
+        object_schema({"manifest": _NONEMPTY_STRING}, required=("manifest",)),
+        verify_pdf_source_bundle,
+        effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH}),
     ),
     _spec(
         "acquire-html-bundle",

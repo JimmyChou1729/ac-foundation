@@ -15,7 +15,8 @@ dependencies = [
   "ac-llm>=2,<3",
   "beautifulsoup4>=4.12",
   "jsonschema>=4.22",
-  "lxml>=5.0"
+  "lxml>=5.0",
+  "httpx>=0.27,<1"
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
