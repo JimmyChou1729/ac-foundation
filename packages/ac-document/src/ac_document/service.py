@@ -154,6 +154,18 @@ class AcDocumentService:
             SourceBundle(primary=primary, validators=validators), policy=policy
         )
 
+    def parse_pdf_source(self, source, *, manifest):
+        """Parse the exact normalized source with verified PDF provenance."""
+        from .pdf_source import verify_pdf_source_bundle, bind_pdf_source, PDFSourceBundleError
+        from .rich_document import RichDocumentParserService
+        from pathlib import Path
+        bundle = verify_pdf_source_bundle(manifest)
+        if Path(source).resolve() != (Path(manifest).parent / bundle["source"]["path"]).resolve():
+            raise PDFSourceBundleError("pdf_source_mismatch", "Use the source belonging to this PDF manifest.")
+        primary = self.resolve_local_source(source)
+        rich = RichDocumentParserService(self.repository).parse_source(primary)
+        return bind_pdf_source(rich, bundle)
+
     def export_rich_document(
         self,
         source: str | Path,
@@ -161,6 +173,7 @@ class AcDocumentService:
         output_dir: str | Path,
         validator: str | Path | None = None,
         source_format: SourceFormat | str | None = None,
+        pdf_source_manifest: str | Path | None = None,
     ) -> dict[str, object]:
         from .rich_document import export_rich_document_workspace
 
@@ -170,6 +183,7 @@ class AcDocumentService:
             output_dir=output_dir,
             validator=validator,
             source_format=source_format,
+            pdf_source_manifest=pdf_source_manifest,
         )
 
     @property

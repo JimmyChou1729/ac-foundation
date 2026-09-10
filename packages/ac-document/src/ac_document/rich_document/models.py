@@ -344,6 +344,12 @@ class RichDocument:
         if any(item.block_id not in block_ids for item in page_map):
             raise ValueError("rich page map refers to an unknown block")
         metadata_value = dict(self.metadata)
+        if "pdf_source" in metadata_value:
+            from ..pdf_source import validate_pdf_source_metadata
+
+            validate_pdf_source_metadata(
+                metadata_value["pdf_source"], blocks, page_map, self.source
+            )
         manifest = None
         if SOURCE_TARGET_MANIFEST_METADATA_KEY in metadata_value:
             manifest = metadata_value[SOURCE_TARGET_MANIFEST_METADATA_KEY]

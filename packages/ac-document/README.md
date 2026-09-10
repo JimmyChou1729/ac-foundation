@@ -59,6 +59,91 @@ ac-document acquire-html-bundle https://example.org/document.html --output-dir d
 python -m pytest packages/ac-document/tests
 ```
 
+## PDF source bundles from MinerU
+
+Import an existing **MinerU 3.4.5 pipeline** result into a portable document
+source. This offline adapter needs `pdftotext` to read the original PDF's page
+count; it accepts scanned PDFs with empty text layers. Run MinerU separately
+before importing its content list, middle JSON, and adjacent image files.
+HTML conversion decodes MinerU's Markdown text escapes while preserving LaTeX
+formula payloads, code, and the original provider evidence. Inline formulas in
+text surrounding table grids remain source math after table sanitization.
+
+```bash
+ac-document import-mineru-bundle book.pdf \
+  --content-list local/mineru/book/auto/book_content_list.json \
+  --middle-json local/mineru/book/auto/book_middle.json \
+  --output-dir local/book-source
+ac-document verify-pdf-source-bundle local/book-source/manifest.json
+ac-document export-rich-document local/book-source/source.html \
+  --pdf-source-manifest local/book-source/manifest.json \
+  --output-dir local/book-publication
+```
+
+The public Python functions are `import_mineru_bundle()` and
+`verify_pdf_source_bundle()`. `AcDocumentService.export_rich_document()` accepts
+the same explicit `pdf_source_manifest` argument. Both command operations are
+registered with the arbitrary-local-path effect; they require no Agent or Web
+application.
+
+`restore_mineru_page_items(items, middle)` returns a deep-copied list of ordinary
+content-list dictionaries for page-local text consumers. For text merge chains,
+it checks the original `preproc_blocks` line geometry, span text, reading order,
+and cross-page markers before splitting the merged text and filling deleted
+placeholders. Inline formulas remain formulas, and a word split across pages
+retains the original page-end hyphen. Other items and their order are unchanged;
+neither input is modified. Missing, ambiguous, inconsistent, or unsupported merge
+evidence raises `PDFSourceBundleError` with code `mineru_page_restore_unavailable`.
+Callers must not treat the unmodified merged text as page-local after this error.
+Import uses this helper and retains changed items as the additional hashed
+`evidence/page-content-list.json`, alongside both original provider JSON files.
+Cross-page table reconstruction is not supported: marked merged tables are
+rejected, while unmarked tables retain the provider's reported page association.
+
+The source directory must be new. It is published atomically and contains
+`source.html`, `original.pdf`, the original provider JSON under `evidence/`,
+content-addressed images under `assets/`, and `manifest.json` with schema
+`ac.document.pdf_source_bundle.v1`. Every stored file has a byte count and SHA-256;
+verification works after moving the whole directory and rejects changed or
+missing files. Raw equation/table crops are retained as evidence without
+adding duplicate figures to the rendered source. Missing or unsupported images
+leave available captions and text with explicit coverage warnings. Resource
+paths must stay inside the input result directory. Supported images are PNG,
+JPEG, and WebP; original PDFs have no fixed byte-size ceiling; imports are bounded to
+50 MiB per JSON, 25 MiB
+per image and 200 MiB of images in total.
+
+Normalization preserves tables, captions, formulas, lists, code, and page footnotes
+from the structured result. Page headers, footers and page-number blocks are
+recorded as excluded furniture. Unknown content types retain readable text and
+produce a warning. Unsupported versions/backends and invalid page indices are
+rejected before publication. The original PDF and OCR result are paired by the
+caller; matching page counts do not establish that the recognized text is correct.
+
+The manifest accounts for every original page. `parsed` means content was
+emitted; `partial` means available content accompanies an extraction gap;
+`empty` means the provider's middle data reports no readable content; `unavailable`
+means no usable content is available for that page. An empty recognized text
+region is an extraction gap, not evidence of a truly blank page. Original
+provider order is retained within each page, including its footnotes. The middle
+data's readable/visual block count (`expected_entries`) is a lower-bound coverage
+check against the content list. Missing inventory or fewer reported entries
+produces a gap, never a verified empty page. This count cannot detect every
+semantic omission. Empty table grids retain available crops/captions with a gap
+warning; they do not count as successfully extracted tables.
+
+Use the manifest with the exact bundled HTML when exporting. The resulting
+RichDocument carries its normal `page_map` and codec-validated
+`metadata.pdf_source` (`ac.document.pdf_source_provenance.v1`): original PDF and
+normalized source hashes, bundle identity, page coverage, and per-block provider
+entry/bounding-box provenance. Coordinates use MinerU's normalized 0–1000 page
+space; absent coordinates remain null. `proofread` is always false. This binding
+records extraction provenance and is separate from the optional PDF text
+validator; `--validator` and `--pdf-source-manifest` cannot be combined.
+Ordinary exports without the manifest keep their existing behavior. Downstream
+callers must pass this manifest explicitly to preserve the PDF mapping; simply
+opening the generated HTML does not bind it automatically.
+
 ## Explicit HTML bundle acquisition
 
 `ac-document acquire-html-bundle` is the only URL-fetching document command.
@@ -334,3 +419,133 @@ diagnostic while preserving core blocks. Documents without the metadata remain
 compatible with a unique exact-locator fallback.
 An explicitly present `null` manifest is invalid; only an absent key selects
 the fallback.
+
+## Running MinerU
+
+The optional execution API uses the same PDF source bundle for a local
+**MinerU 3.4.5 pipeline** installation and an explicitly selected
+**MinerU 3.4.5 FastAPI protocol 2** service. It does not install MinerU or its
+models into Foundation, ALC or an agent plugin. Install the runtime separately
+using the upstream installation instructions and review the runtime/model
+licenses; MinerU is not distributed as part of this package.
+
+```sh
+ac-document doctor-mineru --executable /path/to/mineru
+ac-document parse-pdf-mineru input.pdf --executable /path/to/mineru \
+  --job-dir ./ocr-job --language en --timeout-seconds 900
+
+ac-document doctor-mineru --api-url https://ocr.example.org
+ac-document parse-pdf-mineru input.pdf --api-url https://ocr.example.org \
+  --token-env MINERU_SERVICE_TOKEN --job-dir ./remote-ocr-job --language ch
+
+ac-document export-rich-document ./ocr-job/bundle/source.html \
+  --pdf-source-manifest ./ocr-job/bundle/manifest.json --output-dir ./publication
+```
+
+`doctor_mineru` and `parse_pdf_mineru` are also public Python APIs. Both commands
+require exactly one executable or service URL. Language currently supports `en`
+and `ch`; parsing uses `auto`, with formula and table extraction enabled.
+`doctor` checks version/health, not model completeness or OCR accuracy. Run a
+small PDF to check inference. Local MinerU inherits the caller's runtime/model
+configuration and may download missing models according to that configuration.
+The local timeout stops the owned process group, allowing up to 15 seconds
+for cleanup; it never stops a user's existing service. Local execution currently
+requires macOS or Linux. Use service mode on Windows. Local child processes
+bypass environment proxies so temporary loopback service traffic stays local;
+pre-download models if your network requires a download proxy.
+
+A service call uploads the PDF to the explicitly selected service. Remote URLs
+require HTTPS; loopback development servers may use HTTP. Credentials in URLs,
+query parameters and redirects are rejected. Optional bearer authentication
+uses the named environment variable; only its name is saved, never its value.
+Environment proxies are disabled. The service needs to support the upstream
+`/health`, `/tasks`, `/tasks/{id}` and `/tasks/{id}/result` endpoints, including
+ZIP results. Returned URLs and server filesystem paths are never followed.
+This is not the hosted MinerU API or an arbitrary OCR endpoint adapter.
+
+A job directory belongs to one PDF digest and one configuration. Invoke the
+same command to reuse a completed verified bundle or resume polling/downloading
+a saved service task. A timeout does not cancel remote work. Interrupted or
+ambiguous submissions without a saved task ID are not resubmitted automatically.
+A missing/expired server task requires inspecting the service before explicitly
+starting a new job directory. Local failures similarly require a new job after
+inspection; local inference checkpoints are not resumable. A downloaded result
+can be imported again locally after interruption without another upload.
+Keep private job directories on a trusted local filesystem; they contain the
+original PDF and raw OCR result. Do not edit `job.json` to force retries.
+
+Original PDF inputs have no fixed byte-size ceiling; processing still depends
+on available memory, disk and the selected service. Downloads and total extracted bytes are limited
+to 512 MiB with at most 10,000 archive entries. Traversal paths, links, duplicate
+members and encrypted archives are rejected before importing results. The
+source-bundle limits and coverage warnings above apply as well. No automatic
+fallback to another machine or provider occurs. Web settings, plugin workflow
+integration, shared credential storage and Mathpix remain separate integrations.
+
+### Project configuration and workflow integration
+
+`configure-mineru --config-path <project>/.ac/mineru.json` saves one of the
+same executable/service configurations, plus `--language en|ch` and optional
+`--token-env`. The file contains no credential values. It can be read before
+MinerU is installed; `doctor-configured-mineru --config-path ...` checks runtime
+availability. `parse-pdf-configured-mineru PDF --config-path ... --job-dir ...`
+uses that configuration. ALC Web and the agent plugin use this same project
+path. An existing job still requires its original configuration when resumed;
+changing a profile is not a migration or authorization to upload a file.
+
+Python consumers can call `AcDocumentService.parse_pdf_source(source,
+manifest=...)` to obtain the same verified provenance-bound RichDocument used
+by export, without creating a publication directory. `parse_pdf_mineru` also
+accepts an optional `checkpoint` callback for caller-controlled pause/cancel;
+raising stops owned local execution, while already submitted remote work is
+preserved for subsequent polling. A network operation may take up to its
+current bounded request timeout to yield to a stop request.
+
+An explicitly approved OCR text revision can be published with
+`ac_document.pdf_revision.publish_reviewed_pdf_source()`. The caller owns visual
+proofreading and user approval; Foundation only verifies the source-bound
+receipt and preserves document structure and assets. Publication creates a new
+bundle with the original manifest/source and approval receipt as hashed
+evidence. PDF bytes, provider, resources, entries and page mappings remain
+bound to the original manifest. Rich-document provenance sets `proofread=true`
+only for this verified revision and includes its review identity. This records
+that review occurred; it does not guarantee perfect recognition.
+An existing output is reusable only for the same source bundle, candidate,
+reviewed bytes, and complete review receipt. A different receipt, including a
+model-to-human approval change, requires a new output directory; a conflicting
+retry is rejected without changing the existing bundle.
+
+Revision receipts v2 distinguish model-only adoption (`reviewer=model`,
+`approved=false`, nonnegative uncertainty count) from human approval
+(`reviewer=user`, `approved=true`, zero unresolved uncertainties). Both preserve
+source integrity. Model-only provenance keeps `proofread=false` and records
+`proofreading.review_mode=model`; it must not be displayed as human-reviewed.
+Human revisions record `review_mode=human`. Optional string maps retain manual
+edits and uncertainty dispositions in the hashed receipt. Existing v1 human
+receipts remain valid. These records express review status, not guaranteed OCR
+accuracy or exact visual reproduction of the PDF.
+
+MinerU normalization conservatively retains a unique, short discarded header when
+its geometry places it immediately above a small image beside a level-one title.
+It preserves the exact OCR text and the image; it does not infer chapter numbers
+from images. Repeated headers, numeric page furniture, and ambiguous layouts stay
+excluded. Original provider evidence and normalized page items are both retained;
+restored labels also increase expected-entry counts so they cannot mask missing
+body entries.
+
+Before generating source HTML and section structure, MinerU import also filters
+misclassified running section headers automatically, independently of any later
+proofreading step. A short numbered title in the top margin must have a matching
+body heading and repeated page-position evidence. A single margin occurrence
+requires the body heading on the same page and a pattern established by other
+repeated section headers. Ambiguous cases remain included. Inferred headers are
+recorded as excluded entries; normalized evidence records their original type and
+classification reason, while raw provider files remain unchanged. Existing bundles
+are immutable and must be imported again to apply this filtering.
+
+Local OCR retains the last 64 KiB of subprocess output in the private
+`local-ocr.log` file and records `exit_code` in `local-ocr.json`. Known
+credential environment values and Bearer credentials are redacted. Failed
+local executions are not automatically repeated. Page restoration also
+supports MinerU `index` blocks exported as text, using the same exact original
+line and geometry checks as ordinary paragraphs.

@@ -19,8 +19,13 @@ from .document_search import *
 from .document_structure import *
 from .epub import *
 from .html_bundle import *
+from .mineru import import_mineru_bundle
+from .mineru_pages import restore_mineru_page_items
+from .mineru_runner import doctor_mineru, parse_pdf_mineru
+from .mineru_config import configure_mineru, load_mineru_config, validate_mineru_config, doctor_configured_mineru, parse_pdf_configured_mineru
 from .operation_registry import *
 from .parse import *
+from .pdf_source import *
 from .registry import (
     OPERATION_REGISTRY,
     REGISTRY_SCHEMA_VERSION,
@@ -39,6 +44,15 @@ from .workflows import *
 from . import workflow_support
 
 __all__ = [
+    "PDF_SOURCE_BUNDLE_SCHEMA",
+    "PDF_SOURCE_PROVENANCE_SCHEMA",
+    "PDFSourceBundleError",
+    "import_mineru_bundle",
+    "restore_mineru_page_items",
+    "configure_mineru", "load_mineru_config", "validate_mineru_config", "doctor_configured_mineru", "parse_pdf_configured_mineru",
+    "doctor_mineru",
+    "parse_pdf_mineru",
+    "verify_pdf_source_bundle",
     "AcDocumentService",
     "AssetImporter",
     "CACHED_DOCUMENT_REF_SCHEMA",

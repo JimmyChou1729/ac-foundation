@@ -27,11 +27,32 @@ def export_rich_document_workspace(
     output_dir: str | Path,
     validator: str | Path | None = None,
     source_format: SourceFormat | str | None = None,
+    pdf_source_manifest: str | Path | None = None,
 ) -> dict[str, object]:
     """Parse one local rich source into a portable renderer handoff."""
 
     output = Path(output_dir).expanduser().resolve(strict=False)
     _require_available_output(output)
+
+    pdf_bundle = None
+    if pdf_source_manifest is not None:
+        from ..pdf_source import PDFSourceBundleError, verify_pdf_source_bundle
+
+        if validator is not None:
+            raise PDFSourceBundleError(
+                "pdf_source_validator_conflict",
+                "PDF extraction provenance is separate from PDF text validation.",
+            )
+        pdf_bundle = verify_pdf_source_bundle(pdf_source_manifest)
+        bundled_source = (
+            Path(pdf_source_manifest).expanduser().resolve().parent
+            / pdf_bundle["source"]["path"]
+        )
+        if Path(source).expanduser().resolve() != bundled_source.resolve():
+            raise PDFSourceBundleError(
+                "pdf_source_mismatch",
+                "Use the normalized source belonging to this PDF manifest.",
+            )
 
     primary = repository.import_path(source, source_format=source_format)
     validators = (
@@ -47,9 +68,16 @@ def export_rich_document_workspace(
     outcome = RichDocumentParserService(repository).parse(
         SourceBundle(primary=primary, validators=validators)
     )
+    document = outcome.document
+    warnings = list(outcome.warnings)
+    if pdf_bundle is not None:
+        from ..pdf_source import bind_pdf_source
+
+        document = bind_pdf_source(document, pdf_bundle)
+        warnings = list(dict.fromkeys([*warnings, *pdf_bundle["warnings"]]))
 
     resources: list[tuple[dict[str, object], bytes]] = []
-    for asset in outcome.document.assets:
+    for asset in document.assets:
         stored = repository.get_asset(asset.artifact_digest)
         payload = repository.read_asset_bytes(stored)
         if (
@@ -76,7 +104,7 @@ def export_rich_document_workspace(
             )
         )
 
-    source_payload = _json_bytes(rich_document_to_document(outcome.document))
+    source_payload = _json_bytes(rich_document_to_document(document))
     metadata_payload = _json_bytes(
         {
             "glossary": [],
@@ -103,8 +131,8 @@ def export_rich_document_workspace(
             }
             for item, _payload in resources
         ],
-        "document_digest": outcome.document.document_digest,
-        "warnings": list(outcome.warnings),
+        "document_digest": document.document_digest,
+        "warnings": warnings,
     }
 
 
