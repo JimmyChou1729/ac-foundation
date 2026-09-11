@@ -139,7 +139,9 @@ def test_timeout_resumes_saved_task_without_resubmission(input_pdf, server):
     calls, options = server
     options["status"] = "processing"
     with pytest.raises(PDFSourceBundleError) as e:
-        run(input_pdf, timeout_seconds=0.02)
+        # Leave enough time for the health check and submission response so the
+        # timeout exercises polling/resume rather than pre-submission setup.
+        run(input_pdf, timeout_seconds=0.25)
     assert e.value.code == "mineru_timeout"
     assert (
         json.loads((input_pdf.parent / "job/job.json").read_text())["task_id"]
