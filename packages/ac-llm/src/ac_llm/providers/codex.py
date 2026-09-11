@@ -140,6 +140,14 @@ class CodexAdapter:
         has_image_inputs: bool = False,
         total_timeout_seconds: float | None = None,
     ) -> ProviderExecution:
+        if len(prompt) > 1_048_576:
+            raise ProviderFailure(
+                "Codex input exceeds its request size limit.",
+                category=FailureCategory.INVALID_REQUEST,
+                retryable=False,
+                details={"code": "input_too_large", "max_chars": 1_048_576,
+                         "actual_chars": len(prompt)},
+            )
         schema_path: Path | None = None
         output_path: Path | None = None
         if output_schema is not None:

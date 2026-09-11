@@ -544,7 +544,11 @@ classification reason, while raw provider files remain unchanged. Existing bundl
 are immutable and must be imported again to apply this filtering.
 
 Local OCR retains the last 64 KiB of subprocess output in the private
-`local-ocr.log` file and records `exit_code` in `local-ocr.json`. Known
+`local-ocr.log` file and records `exit_code` and a diagnostic category in
+`local-ocr.json`. Nonzero exits persist as `failed`, including on subsequent
+inspection; timeout, memory and signal evidence are distinguished from an
+unspecified provider failure. Missing exception detail is not treated as proof
+of a timeout or resource shortage. Known
 credential environment values and Bearer credentials are redacted. Failed
 local executions are not automatically repeated. Page restoration also
 supports MinerU `index` blocks exported as text, using the same exact original

@@ -1001,3 +1001,16 @@ def test_claude_structured_failure_preserves_rate_limit_retry_after() -> None:
     assert failure is not None
     assert failure.category is FailureCategory.RATE_LIMIT
     assert failure.retry_after_seconds == 45
+
+
+def test_codex_checks_final_prompt_size_before_process_start(tmp_path):
+    from ac_llm.providers.codex import CodexAdapter
+    with pytest.raises(ProviderFailure) as error:
+        CodexAdapter(binary='must-not-be-executed')._run(
+            ['must-not-be-executed', '-'], 'x' * 1_048_577, None, None,
+            tmp_path, None, None, None,
+        )
+    assert error.value.category is FailureCategory.INVALID_REQUEST
+    assert not error.value.retryable
+    assert error.value.details == {'code': 'input_too_large',
+                                   'max_chars': 1_048_576, 'actual_chars': 1_048_577}

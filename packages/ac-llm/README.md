@@ -203,3 +203,8 @@ Actual signal-delivery failures remain errors.
 Local-app CLI execution rejects API key and endpoint environment overrides before
 starting or resuming a call. Configure custom services through an explicit API
 connection; standard CLI execution retains its existing environment behavior.
+
+Codex requests exceeding its 1,048,576-character input limit are rejected before
+process launch after local-app inputs are materialized. Provider-reported
+`input_too_large` failures are also classified as non-retryable invalid requests;
+callers must reduce or partition the input rather than retry it unchanged.

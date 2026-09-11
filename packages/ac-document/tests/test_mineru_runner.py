@@ -292,7 +292,7 @@ def test_local_cli_produces_same_bundle(input_pdf):
 
 def test_local_failure_is_not_automatically_reexecuted(input_pdf):
     executable = fake_executable(input_pdf.parent, fail=True)
-    for code in ["mineru_local_failed", "mineru_local_interrupted"]:
+    for code in ["mineru_local_failed", "mineru_local_failed"]:
         with pytest.raises(PDFSourceBundleError) as e:
             parse_pdf_mineru(
                 input_pdf, job_dir=input_pdf.parent / "job", executable=executable
@@ -539,3 +539,21 @@ def test_local_failure_preserves_bounded_redacted_diagnostics(input_pdf, monkeyp
     assert 'synthetic-private-key' not in text and 'fake-token' not in text
     assert len(log.read_bytes()) <= 65536
     assert log.stat().st_mode & 0o777 == 0o600
+
+
+def test_failed_local_job_stays_failed_without_resubmission(input_pdf):
+    executable = fake_executable(input_pdf.parent, fail=True)
+    root = input_pdf.parent / 'job'
+    for _ in range(2):
+        with pytest.raises(PDFSourceBundleError):
+            parse_pdf_mineru(input_pdf, job_dir=root, executable=executable)
+        assert json.loads((root / 'job.json').read_text())['status'] == 'failed'
+    diagnostic = json.loads((root / 'local-ocr.json').read_text())
+    assert diagnostic['diagnostic'] == 'provider_error_without_details'
+
+
+def test_local_failure_diagnostics_distinguish_timeout_memory_and_signal():
+    from ac_document.mineru_runner import _local_failure_kind
+    assert _local_failure_kind('httpx.ReadTimeout', 1) == 'timeout'
+    assert _local_failure_kind('RuntimeError: out of memory', 1) == 'memory_exhausted'
+    assert _local_failure_kind('', -9) == 'signal_9'

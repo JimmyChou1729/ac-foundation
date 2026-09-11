@@ -215,3 +215,12 @@ def test_cli_stop_uses_the_durable_stop_control(tmp_path, capsys) -> None:
     result = json.loads(capsys.readouterr().out)
     assert result["schema_version"] == "ac.command_result.v2"
     assert result["status"] == "completed"
+
+
+def test_codex_stderr_input_limit_is_not_retryable_transport():
+    from ac_llm.providers._cli import classify_cli_failure
+    from ac_llm.errors import FailureCategory
+    failure = classify_cli_failure('Error: turn/start failed: Input exceeds the maximum length of 1048576 characters. (code -32602), data: {"input_error_code":"input_too_large"}')
+    assert failure.category is FailureCategory.INVALID_REQUEST
+    assert not failure.retryable
+    assert failure.details['code'] == 'input_too_large'
