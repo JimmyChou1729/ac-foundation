@@ -484,6 +484,13 @@ def classify_provider_failure_evidence(
     """Classify bounded provider-owned error evidence with anchored patterns."""
 
     lowered = evidence.lower()
+    if re.search(r"\binput_too_large\b|\binput exceeds the maximum length of \d+ characters", lowered):
+        return ProviderFailure(
+            "Provider input exceeds its request size limit.",
+            category=FailureCategory.INVALID_REQUEST,
+            retryable=False,
+            details={"code": "input_too_large"},
+        )
     if re.search(
         r"(?:^|\n)\s*(?:401|403)(?:\b|:)"
         r"|\bhttp(?:/\d(?:\.\d)?)?\s*(?:401|403)(?:\b|:)"

@@ -423,6 +423,7 @@ def parse_pdf_mineru(
                 "submitting",
                 "submitted",
                 "running",
+                "failed",
                 "ready",
                 "completed",
             }:
@@ -461,6 +462,8 @@ def parse_pdf_mineru(
             return _finish(root, state, checkpoint)
         deadline = time.monotonic() + timeout_seconds
         if config["mode"] == "local":
+            if state["status"] == "failed":
+                _fail("mineru_local_failed", "Previous local OCR failed; inspect local-ocr.log before starting a new job.")
             if state["status"] != "prepared":
                 _fail(
                     "mineru_local_interrupted",
@@ -532,12 +535,15 @@ def parse_pdf_mineru(
                 (root / "local-ocr.log").chmod(0o600)
                 atomic_write_bytes(root / "local-ocr.json", json_bytes({
                     "exit_code": process.returncode, "log": "local-ocr.log",
+                    "diagnostic": _local_failure_kind(diagnostic, process.returncode),
                 }))
                 (root / "local-ocr.json").chmod(0o600)
             if code:
+                state["status"] = "failed"
+                _save(root, state)
                 _fail(
                     "mineru_local_failed",
-                    f"Local OCR failed (exit code {code}); inspect local-ocr.log in the OCR job directory.",
+                    f"Local OCR failed (exit code {code}, {_local_failure_kind(diagnostic, code)}); inspect local-ocr.log in the OCR job directory.",
                 )
         else:
             if state["status"] == "submitting":
@@ -640,3 +646,15 @@ def parse_pdf_mineru(
         state["status"] = "ready"
         _save(root, state)
         return _finish(root, state, checkpoint)
+
+
+def _local_failure_kind(log: str, code: int | None) -> str:
+    if code == 0:
+        return "completed"
+    if code is not None and code < 0:
+        return f"signal_{-code}"
+    if re.search(r"out of memory|cannot allocate memory|MemoryError", log, re.I):
+        return "memory_exhausted"
+    if re.search(r"ReadTimeout|ConnectTimeout|TimeoutError|timed out", log, re.I):
+        return "timeout"
+    return "provider_error_without_details" if not re.search(r"Traceback|Exception", log) else "provider_exception"
