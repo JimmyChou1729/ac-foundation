@@ -337,10 +337,11 @@ def _validate_classifications(
         if _string(relation, "composition") != "inline":
             _invalid("classification composition is unsupported")
         if (
-            _string(relation, "separator") != ": "
-            or _string(relation, "separator_source")
-            != "latexml_ar5iv_classification_after"
-        ):
+            _string(relation, "separator"), _string(relation, "separator_source")
+        ) not in {
+            (": ", "latexml_ar5iv_classification_after"),
+            (" ", "latexml_keywords_inline"),
+        }:
             _invalid("classification separator provenance is invalid")
 
 
