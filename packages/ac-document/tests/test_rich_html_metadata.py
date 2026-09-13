@@ -144,3 +144,57 @@ def test_pdf_math_diagnostic_warnings_are_bounded_summaries(tmp_path) -> None:
     assert len(
         [entry for entry in outcome.report.entries if entry.subject_id.startswith("math-")]
     ) == 20
+
+
+def test_latexml_keywords_compose_inline_preserving_links(tmp_path):
+    from bs4 import BeautifulSoup
+    from ac_document._parsing.html_source import html_heading_is_document_metadata
+
+    html = '''<article><h1>Paper</h1><div class="ltx_keywords" id="keywords">
+      <h6 class="ltx_title ltx_title_keywords">Keywords: </h6>
+      <a href="https://astrothesaurus.org/uat/329">Cosmic rays</a> —
+      <a href="https://astrothesaurus.org/uat/711">Heliosphere</a>
+      </div><p id="body">Unheaded article body.</p></article>'''
+    heading = BeautifulSoup(html, "html.parser").find("h6")
+    assert html_heading_is_document_metadata(heading)
+    repository = SourceRepository(tmp_path / "cache")
+    document = RichDocumentParserService(repository).parse_source(
+        _store(repository, html.encode(), SourceFormat.HTML)
+    )
+    presentation = source_presentation(document)
+    relation, = presentation["classifications"]
+    blocks = {block.block_id:block for block in document.blocks}
+    label = blocks[relation["heading_block_id"]]
+    assert label.payload["text"] == "Keywords:"
+    assert relation["composition"] == "inline"
+    assert relation["separator"] == " "
+    assert relation["separator_source"] == "latexml_keywords_inline"
+    values = [blocks[key] for key in relation["value_block_ids"]]
+    assert " ".join(b.payload["text"] for b in values) == "Cosmic rays — Heliosphere"
+    field_entries = [entry for entry in presentation["blocks"] if entry["block_id"] in relation["value_block_ids"]]
+    links = [span for entry in field_entries for field in entry["fields"] for span in field["inline_spans"] if span["kind"] == "link"]
+    assert {span["target"] for span in links} == {"https://astrothesaurus.org/uat/329", "https://astrothesaurus.org/uat/711"}
+    body = next(block for block in document.blocks if block.locator.source_id == "body")
+    assert body.section_path == label.section_path == document.sections[0].path
+    assert any(entry["block_id"] == label.block_id and entry["roles"] == ("classification",) for entry in presentation["blocks"])
+
+
+def test_keyword_text_alone_does_not_classify_real_heading():
+    from bs4 import BeautifulSoup
+    from ac_document._parsing.html_source import html_heading_is_document_metadata
+    assert not html_heading_is_document_metadata(BeautifulSoup('<h2>Keywords</h2>', 'html.parser').h2)
+    assert html_heading_is_document_metadata(BeautifulSoup('<h6 class="ltx_title_keywords">Tags</h6>', 'html.parser').h6)
+
+
+def test_ambiguous_keyword_wrappers_do_not_create_inline_relations(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    fragments = [
+        '<div class="ltx_keywords"><h6 class="ltx_title ltx_title_classification">Labels</h6>Value</div>',
+        '<div class="ltx_keywords ltx_classification"><h6 class="ltx_title ltx_title_keywords">Labels</h6>Value</div>',
+        '<div class="ltx_keywords"><h6 class="ltx_title ltx_title_keywords">Labels</h6><div class="ltx_classification"><h6 class="ltx_title ltx_title_classification">Nested</h6>Value</div></div>',
+    ]
+    for fragment in fragments:
+        document = RichDocumentParserService(repository).parse_source(
+            _store(repository, ('<article><h1>Paper</h1>' + fragment + '</article>').encode(), SourceFormat.HTML)
+        )
+        assert not source_presentation(document)["classifications"]

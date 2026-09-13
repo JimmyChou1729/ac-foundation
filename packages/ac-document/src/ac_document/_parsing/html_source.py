@@ -42,11 +42,15 @@ def rich_html_selector(node: Tag, ordinal: int) -> str:
     return f"{node.name}:nth-block({ordinal + 1})"
 
 
+HTML_CLASSIFICATION_CLASSES = frozenset({"ltx_classification", "ltx_keywords"})
+HTML_CLASSIFICATION_TITLES = frozenset({"ltx_title_classification", "ltx_title_keywords"})
+
+
 def html_heading_is_document_metadata(node: Tag) -> bool:
     """Return whether a converter heading labels metadata, not a section.
 
     LaTeXML represents classifications such as PACS codes with an ``h6``
-    inside ``ltx_classification``.  Treating that label as a document heading
+    inside ``ltx_classification``, and keyword labels inside ``ltx_keywords``.  Treating that label as a document heading
     incorrectly makes the following unheaded article body a PACS section.
     The converter's structural class is the contract; the displayed label is
     deliberately irrelevant.
@@ -55,11 +59,11 @@ def html_heading_is_document_metadata(node: Tag) -> bool:
     if not isinstance(node, Tag):
         return False
     classes = {str(value).casefold() for value in node.get("class") or ()}
-    if "ltx_title_classification" in classes:
+    if HTML_CLASSIFICATION_TITLES & classes:
         return True
     parent = node.find_parent(
         class_=lambda value: value
-        and "ltx_classification" in str(value).casefold().split()
+        and HTML_CLASSIFICATION_CLASSES.intersection(str(value).casefold().split())
     )
     return isinstance(parent, Tag)
 

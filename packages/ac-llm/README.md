@@ -103,16 +103,17 @@ requests remain readable. Requests without effort keep their original encoding
 and semantic identity. Consumers that persist model
 selection must include the effort in their own versioned generation recipes.
 
-The `LOCAL_APP` execution profile materializes verified inputs for
-CLI calls and preserves bounded host-broker requests where the workflow needs
-them. Codex uses a read-only sandbox with shell, default tools, and multi-agent
-disabled. Explicit `internet=True` enables native live web search; otherwise it
-is disabled. Claude disables tools, discovered settings
-and MCP configuration. For Claude, connection URL, token/API key, and model
-alias environment settings are read from user-level `settings.json`; explicit
-process settings take precedence. Credentials stay in child environment, never
-argv or task inputs. Helper/cloud authentication is unsupported in this profile.
-These are version-sensitive CLI contracts, not a claim
+The `LOCAL_APP` execution profile materializes verified inputs for CLI calls
+and preserves bounded host-broker requests where the workflow needs them.
+Codex keeps default tools, shell tools, and multi-agent disabled in a read-only
+sandbox. When the caller permits `internet=True`, it explicitly enables native
+live web search; otherwise web search is disabled. Callers should scope this
+permission to the individual tasks that need external evidence. Claude disables tools, discovered settings
+and MCP configuration. For Claude, only connection URL, token/API key and model
+alias environment settings are read from the user-level `settings.json`; process
+environment overrides take precedence. Credentials are passed only through the
+child environment. Authentication helpers and cloud-provider authentication are
+not supported in this profile. These are version-sensitive CLI contracts, not a claim
 that arbitrary provider binaries are OS-isolated. They do not attest that the
 host has unrestricted authority. Existing profiles keep their prior behavior.
 

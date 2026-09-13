@@ -265,8 +265,9 @@ def test_html_explicit_terms_ignore_dash_only_metadata_placeholder(tmp_path):
 
     assert "explicit_term_fields" not in standard.metadata
     assert "explicit_term_fields" not in rich.metadata
+    assert all(section.title != "Keywords:" for section in standard.sections)
     assert any(
-        section.title == "Keywords:"
+        section.title == "Paper"
         and "Infrared astronomy" in section.text
         and "Symbiotic stars" in section.text
         for section in standard.sections

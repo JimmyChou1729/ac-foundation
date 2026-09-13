@@ -304,6 +304,13 @@ blocks heuristically. The exact provenance token is
 to arbitrary HTML headings or parse remote CSS. Classification headings remain
 outside the outline.
 
+The same inline relation also covers `ltx_keywords` with a direct
+`ltx_title ltx_title_keywords` heading. Keyword labels retain their authored
+punctuation and links; their separator is a single space with provenance
+`latexml_keywords_inline`. Consumers must accept that exact separator/provenance
+pair rather than append a second colon. Bare headings named “Keywords” do not
+acquire metadata semantics.
+
 The unified `captions` registry covers every visible Figure and Table caption.
 It preserves `before_content`, `after_content`, or Table-only `embedded`
 placement and a nullable logical alignment. Alignment is authoritative only

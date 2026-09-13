@@ -14,6 +14,8 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .._parsing import ParseError, normalize_tex
 from .._parsing.html_source import (
+    HTML_CLASSIFICATION_CLASSES,
+    HTML_CLASSIFICATION_TITLES,
     html_roots,
     html_source_position,
     rich_html_selector,
@@ -169,6 +171,7 @@ class _HTMLClassificationFlow:
     locator: SourceLocator
     heading_block_index: int
     value_block_indexes: tuple[int, ...]
+    keywords: bool = False
 
 
 @dataclass(frozen=True)
@@ -2295,7 +2298,7 @@ def _parse_html(
     classifications = []
     for container in soup.find_all(
         class_=lambda value: value
-        and "ltx_classification" in str(value).casefold().split()
+        and HTML_CLASSIFICATION_CLASSES.intersection(str(value).casefold().split())
     ):
         if not isinstance(container, Tag) or id(container) not in classification_ranges:
             continue
@@ -2304,20 +2307,23 @@ def _parse_html(
         if any(
             isinstance(descendant, Tag)
             and descendant is not container
-            and "ltx_classification"
-            in {
+            and HTML_CLASSIFICATION_CLASSES & {
                 str(class_name).casefold()
                 for class_name in descendant.get("class") or ()
             }
             for descendant in container.find_all(True)
         ):
             continue
+        container_classes = {str(c).casefold() for c in container.get("class") or ()}
+        if len(container_classes & HTML_CLASSIFICATION_CLASSES) != 1:
+            continue
+        title_class = "ltx_title_keywords" if "ltx_keywords" in container_classes else "ltx_title_classification"
         semantic_titles = [
             child
             for child in container.find_all(re.compile(r"h[1-6]"), recursive=False)
             if isinstance(child, Tag)
-            and {"ltx_title", "ltx_title_classification"}
-            <= {
+            and "ltx_title" in {str(c).casefold() for c in child.get("class") or ()}
+            and title_class in {
                 str(class_name).casefold()
                 for class_name in child.get("class") or ()
             }
@@ -2349,6 +2355,7 @@ def _parse_html(
                 locator=_html_locator(container, artifact.source_format),
                 heading_block_index=block_start,
                 value_block_indexes=value_indexes,
+                keywords="ltx_keywords" in {str(c).casefold() for c in container.get("class") or ()},
             )
         )
     raw_indexes_by_source_id: dict[str, list[int]] = {}
@@ -4529,8 +4536,8 @@ def _html_heading_semantics(node: Tag) -> tuple[int, tuple[str, ...]]:
     raw_level = int((node.name or "h6")[1:])
     classes = {str(value).casefold() for value in node.get("class") or ()}
     roles = []
-    if "ltx_title_classification" in classes or _html_has_ancestor_class(
-        node, "ltx_classification"
+    if HTML_CLASSIFICATION_TITLES & classes or any(
+        _html_has_ancestor_class(node, name) for name in HTML_CLASSIFICATION_CLASSES
     ):
         roles.append("classification")
 
@@ -4649,7 +4656,7 @@ def _html_classification_ancestor(node: Tag) -> Tag | None:
         classes = {
             str(value).casefold() for value in current.get("class") or ()
         }
-        if "ltx_classification" in classes:
+        if HTML_CLASSIFICATION_CLASSES & classes:
             matches.append(current)
         current = current.parent if isinstance(current.parent, Tag) else None
     return matches[0] if len(matches) == 1 else None
@@ -5657,9 +5664,9 @@ def _finalize_document(
                         for index in relation.value_block_indexes
                     ],
                     "composition": "inline",
-                    "separator": ": ",
+                    "separator": " " if relation.keywords else ": ",
                     "separator_source": (
-                        "latexml_ar5iv_classification_after"
+                        "latexml_keywords_inline" if relation.keywords else "latexml_ar5iv_classification_after"
                     ),
                 }
                 for relation in html_classifications
