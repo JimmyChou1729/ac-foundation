@@ -6,13 +6,13 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..claude_config import claude_connection_environment
 from ..errors import ProviderFailure, FailureCategory
 from ..output import CandidateMaterial
 from ._cli import (
     classify_provider_failure_evidence,
     executable_diagnostic,
     run_cli,
-    validate_local_app_environment,
 )
 from .base import (
     IsolationMode,
@@ -61,6 +61,7 @@ class ClaudeAdapter:
 
     def start(self, request: ProviderRequest, observer: Any, stop: Any) -> ProviderExecution:
         prompt = request.prompt
+        environment = request.environment if request.environment is not None else self.env
         argv = [
             self.binary,
             "--print",
@@ -71,9 +72,7 @@ class ClaudeAdapter:
             request.model,
         ]
         if request.capabilities.get("execution_profile") == "local_app":
-            validate_local_app_environment(
-                self.name, request.environment if request.environment is not None else self.env
-            )
+            environment = claude_connection_environment(environment)
             prompt = _local_app_arguments(argv, request)
         elif request.capabilities.get("effective_host_mode") == "direct":
             argv.append("--dangerously-skip-permissions")
@@ -96,7 +95,7 @@ class ClaudeAdapter:
             prompt,
             request.idle_timeout_seconds,
             request.workspace,
-            request.environment,
+            environment,
             observer,
             stop,
             total_timeout_seconds=getattr(request, "total_timeout_seconds", None),
@@ -110,6 +109,7 @@ class ClaudeAdapter:
         stop: Any,
     ) -> ProviderExecution:
         prompt = request.prompt
+        environment = request.environment if request.environment is not None else self.env
         argv = [
             self.binary,
             "--print",
@@ -120,9 +120,7 @@ class ClaudeAdapter:
             handle.value,
         ]
         if request.capabilities.get("execution_profile") == "local_app":
-            validate_local_app_environment(
-                self.name, request.environment if request.environment is not None else self.env
-            )
+            environment = claude_connection_environment(environment)
             prompt = _local_app_arguments(argv, request)
         elif request.capabilities.get("effective_host_mode") == "direct":
             argv.append("--dangerously-skip-permissions")
@@ -145,7 +143,7 @@ class ClaudeAdapter:
             prompt,
             request.idle_timeout_seconds,
             request.workspace,
-            request.environment,
+            environment,
             observer,
             stop,
             total_timeout_seconds=getattr(request, "total_timeout_seconds", None),

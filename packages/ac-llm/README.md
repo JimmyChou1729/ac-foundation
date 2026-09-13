@@ -106,7 +106,11 @@ selection must include the effort in their own versioned generation recipes.
 The `LOCAL_APP` execution profile materializes verified inputs for tool-free
 CLI calls and preserves bounded host-broker requests where the workflow needs
 them. Codex uses a read-only sandbox; Claude disables tools, discovered settings
-and MCP configuration. These are version-sensitive CLI contracts, not a claim
+and MCP configuration. For Claude, connection URL, token/API key, and model
+alias environment settings are read from user-level `settings.json`; explicit
+process settings take precedence. Credentials stay in child environment, never
+argv or task inputs. Helper/cloud authentication is unsupported in this profile.
+These are version-sensitive CLI contracts, not a claim
 that arbitrary provider binaries are OS-isolated. They do not attest that the
 host has unrestricted authority. Existing profiles keep their prior behavior.
 

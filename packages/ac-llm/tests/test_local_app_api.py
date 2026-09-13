@@ -329,8 +329,7 @@ def test_failed_http_call_closes_progress_before_next_success(tmp_path, monkeypa
 @pytest.mark.parametrize("provider,key", [
     ("codex", "OPENAI_BASE_URL"), ("codex", "CODEX_BASE_URL"),
     ("codex", "OPENAI_API_KEY"), ("codex", "CODEX_API_KEY"),
-    ("claude", "ANTHROPIC_BASE_URL"), ("claude", "ANTHROPIC_API_KEY"),
-    ("claude", "ANTHROPIC_AUTH_TOKEN"), ("claude", "CLAUDE_CODE_USE_BEDROCK"),
+    ("claude", "ANTHROPIC_BASE_URL"), ("claude", "CLAUDE_CODE_USE_BEDROCK"),
     ("claude", "CLAUDE_CODE_USE_VERTEX"), ("claude", "CLAUDE_CODE_USE_FOUNDRY"),
 ])
 @pytest.mark.parametrize("operation", ["start", "resume"])
