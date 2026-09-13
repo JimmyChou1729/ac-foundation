@@ -2861,6 +2861,11 @@ class LLMTaskExecutor:
                 if options.internet
                 else "Internet access is not requested for this task. "
             )
+            if options.profile is LLMExecutionProfile.LOCAL_APP and options.internet:
+                internet = (
+                    "Use available native web search when helpful; host requests "
+                    "remain restricted to declared operations. "
+                )
             return f"{PROVIDER_INSTRUCTION_POLICY} {internet}"
         return None
 

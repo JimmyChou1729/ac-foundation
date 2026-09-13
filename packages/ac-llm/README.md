@@ -103,9 +103,11 @@ requests remain readable. Requests without effort keep their original encoding
 and semantic identity. Consumers that persist model
 selection must include the effort in their own versioned generation recipes.
 
-The `LOCAL_APP` execution profile materializes verified inputs for tool-free
+The `LOCAL_APP` execution profile materializes verified inputs for
 CLI calls and preserves bounded host-broker requests where the workflow needs
-them. Codex uses a read-only sandbox; Claude disables tools, discovered settings
+them. Codex uses a read-only sandbox with shell, default tools, and multi-agent
+disabled. Explicit `internet=True` enables native live web search; otherwise it
+is disabled. Claude disables tools, discovered settings
 and MCP configuration. For Claude, connection URL, token/API key, and model
 alias environment settings are read from user-level `settings.json`; explicit
 process settings take precedence. Credentials stay in child environment, never

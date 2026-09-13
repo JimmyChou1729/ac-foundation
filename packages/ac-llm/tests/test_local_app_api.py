@@ -353,3 +353,21 @@ def test_local_app_checks_inherited_environment(monkeypatch):
     monkeypatch.setenv('ANTHROPIC_BASE_URL', 'https://fixture.invalid')
     with pytest.raises(ProviderFailure): validate_local_app_environment('claude', None)
     validate_local_app_environment('claude', {})
+
+
+@pytest.mark.parametrize("profile,internet,expected", [
+    ("local_app", True, "Use available native web search when helpful"),
+    ("local_app", False, "Internet access is not requested"),
+    ("standard", True, "ask the host"),
+])
+def test_provider_instructions_route_native_search_only_for_local_app(profile, internet, expected):
+    from types import SimpleNamespace
+    from ac_llm import LLMExecutionProfile
+    from ac_llm.executor import LLMTaskExecutor
+    executor = SimpleNamespace(_uses_host_turn=lambda request, options: True)
+    options = SimpleNamespace(profile=LLMExecutionProfile(profile), internet=internet)
+    text = LLMTaskExecutor._provider_instructions(executor, None, options)
+    assert expected in text
+    if profile == "local_app" and internet:
+        assert "host requests remain restricted to declared operations" in text
+        assert "ask the host" not in text
