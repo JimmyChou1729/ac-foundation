@@ -553,3 +553,18 @@ credential environment values and Bearer credentials are redacted. Failed
 local executions are not automatically repeated. Page restoration also
 supports MinerU `index` blocks exported as text, using the same exact original
 line and geometry checks as ordinary paragraphs.
+
+
+Reviewed PDF sources may use `ac.document.pdf_review.v3` for bounded inline
+repairs. `inline_baseline_html` retains the ordinary text-edit result with the
+original document structure and freezes hidden or unmapped text. `inline_repairs` contains page-bound, uniquely
+anchored paragraph proposals and their verification records. Only typed text,
+math alttext, and superscript replacements are allowed; no executable markup,
+resource changes, anchor changes, or cross-paragraph edits are accepted. A paragraph
+may be repaired once per review, so subsequent proposals cannot target newly
+inserted text.
+Publication and later bundle verification both replay the repairs against the
+baseline and require an exact match to the reviewed source. Original PDF, OCR
+source, page mappings and review evidence remain attached. v1/v2 reviews retain
+their existing structure-preserving behavior; model review is never relabeled
+as human approval.

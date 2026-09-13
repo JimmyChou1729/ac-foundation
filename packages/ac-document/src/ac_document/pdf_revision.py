@@ -66,8 +66,10 @@ def publish_reviewed_pdf_source(
             or set(review)
             - required
             - (
-                {"manual_edits", "manual_resolutions"}
-                if review.get("schema_version") == "ac.document.pdf_review.v2"
+                ({"manual_edits", "manual_resolutions", "inline_baseline_html", "inline_repairs"}
+                 if review.get("schema_version") == "ac.document.pdf_review.v3"
+                 else {"manual_edits", "manual_resolutions"})
+                if review.get("schema_version") in {"ac.document.pdf_review.v2", "ac.document.pdf_review.v3"}
                 else set()
             )
         )
@@ -84,7 +86,10 @@ def publish_reviewed_pdf_source(
             "pdf_review_invalid",
             "A complete, explicitly approved source-bound review is required.",
         )
-    if _structure(before) != _structure(reviewed_source):
+    if review.get("schema_version") == "ac.document.pdf_review.v3":
+        from .pdf_inline import validate_inline_revision
+        validate_inline_revision(before, reviewed_source, original, review)
+    elif _structure(before) != _structure(reviewed_source):
         raise PDFSourceBundleError(
             "pdf_review_structure_changed",
             "Review changed source structure or resource bindings.",
@@ -151,7 +156,7 @@ def publish_reviewed_pdf_source(
                             "review_mode": _review_mode(review),
                             "uncertainty_count": review["uncertainty_count"],
                         }
-                        if review["schema_version"] == "ac.document.pdf_review.v2"
+                        if review["schema_version"] in {"ac.document.pdf_review.v2", "ac.document.pdf_review.v3"}
                         else {}
                     ),
                 },

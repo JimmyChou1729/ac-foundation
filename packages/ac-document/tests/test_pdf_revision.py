@@ -462,3 +462,129 @@ def test_invalid_review_mode_combinations(original, tmp_path, fields):
             review=review,
             output_dir=tmp_path / "invalid-mode",
         )
+
+
+def _inline_review(original):
+    from ac_document.pdf_inline import apply_inline_repair
+    r, baseline, review = original
+    bundle = verify_pdf_source_bundle(r['manifest'])
+    anchor = bundle['entries'][0]['source_ids'][0]
+    proposal = {'proposal_id': 'missing-domain', 'anchor_id': anchor,
+                'before_html': 'Corrected wording',
+                'after': [{'kind': 'text', 'value': 'Corrected '}, {'kind': 'math', 'value': r'\mathcal D'}],
+                'reason': 'Visible domain symbol in PDF'}
+    corrected = apply_inline_repair(baseline.decode(), bundle, 1, proposal).encode()
+    review = {**review, 'schema_version': 'ac.document.pdf_review.v3',
+              'reviewer': 'model', 'approved': False,
+              'reviewed_source_sha256': hashlib.sha256(corrected).hexdigest(),
+              'inline_baseline_html': baseline.decode(),
+              'inline_repairs': [{'page_number': 1, 'proposal': proposal, 'verified': True}]}
+    return r, corrected, review
+
+
+def test_inline_review_publishes_verifiable_bundle_and_preserves_original(original, tmp_path):
+    r, corrected, review = _inline_review(original)
+    result = publish_reviewed_pdf_source(r['manifest'], reviewed_source=corrected,
+                                        review=review, output_dir=tmp_path/'inline')
+    bundle = verify_pdf_source_bundle(result['manifest'])
+    previous = verify_pdf_source_bundle(r['manifest'])
+    for field in ('original', 'pages', 'entries', 'resources', 'provider'):
+        assert bundle[field] == previous[field]
+    assert bundle['proofreading']['review_mode'] == 'model'
+    assert (tmp_path/'inline/review/original-source.html').read_bytes() == Path(r['source']).read_bytes()
+    assert Path(result['source']).read_bytes() == corrected
+
+
+@pytest.mark.parametrize('mutation', ['wrong_page', 'unverified', 'baseline_structure', 'outside_change', 'replay_mismatch', 'duplicate'])
+def test_inline_review_rejects_unbound_structural_changes(original, tmp_path, mutation):
+    r, corrected, review = _inline_review(original)
+    if mutation == 'wrong_page':
+        review['inline_repairs'][0]['page_number'] = 2
+    elif mutation == 'unverified':
+        review['inline_repairs'][0]['verified'] = False
+    elif mutation == 'baseline_structure':
+        review['inline_baseline_html'] = review['inline_baseline_html'].replace('</body>', '<p>extra</p></body>')
+    elif mutation == 'outside_change':
+        corrected = corrected.replace(b'</body>', b'<p>extra</p></body>')
+    elif mutation == 'replay_mismatch':
+        corrected = corrected.replace(b'Corrected ', b'Different ')
+    else:
+        review['inline_repairs'].append(review['inline_repairs'][0])
+    review['reviewed_source_sha256'] = hashlib.sha256(corrected).hexdigest()
+    with pytest.raises(PDFSourceBundleError):
+        publish_reviewed_pdf_source(r['manifest'], reviewed_source=corrected,
+                                    review=review, output_dir=tmp_path/'bad-inline')
+    assert not (tmp_path/'bad-inline').exists()
+
+
+@pytest.mark.parametrize('before,after', [
+    ('<math alttext="P_n"></math> 1', [{'kind':'math','value':'P_{n-1}'}]),
+    ('If is', [{'kind':'text','value':'If '},{'kind':'math','value':r'\mathcal D'},{'kind':'text','value':' is'}]),
+    ('&lt;sup&gt;4&lt;/sup&gt;', [{'kind':'sup','value':'4'}]),
+])
+def test_inline_repair_preserves_unselected_bytes(before, after):
+    from ac_document.pdf_inline import apply_inline_repair
+    source = '<html><body><p id="p1">Prefix '+before+' suffix</p></body></html>'
+    bundle = {'entries':[{'source_ids':['p1'],'page_number':1}]}
+    proposal = dict(proposal_id='p',anchor_id='p1',before_html=before,after=after,reason='PDF comparison')
+    result = apply_inline_repair(source,bundle,1,proposal)
+    assert result.startswith('<html><body><p id="p1">Prefix ')
+    assert result.endswith(' suffix</p></body></html>')
+    assert result != source
+
+
+@pytest.mark.parametrize('before,part', [
+    ('word', {'kind':'image','value':'remote'}),
+    ('word', {'kind':'math','value':'x\x00y'}),
+    ('<!--word-->', {'kind':'text','value':'visible'}),
+    ('<sup id="keep">1</sup>', {'kind':'sup','value':'2'}),
+    ('<img src="keep.png">', {'kind':'text','value':'gone'}),
+])
+def test_inline_repair_rejects_markup_and_protected_elements(before, part):
+    from ac_document.pdf_inline import apply_inline_repair
+    source = '<p id="p1">'+before+'</p>'
+    proposal = dict(proposal_id='p',anchor_id='p1',before_html=before,after=[part],reason='PDF comparison')
+    with pytest.raises(PDFSourceBundleError):
+        apply_inline_repair(source,{'entries':[{'source_ids':['p1'],'page_number':1}]},1,proposal)
+
+
+@pytest.mark.parametrize('kind,value', [('math', 'x<y'), ('math', 'r>0'), ('text', '<script>alert(1)</script>')])
+def test_inline_typed_values_escape_markup_without_rejecting_comparisons(kind, value):
+    from ac_document.pdf_inline import apply_inline_repair
+    from bs4 import BeautifulSoup
+    proposal = dict(proposal_id='p',anchor_id='p1',before_html='word',after=[{'kind':kind,'value':value}],reason='PDF comparison')
+    result = apply_inline_repair('<p id="p1">word</p>',{'entries':[{'source_ids':['p1'],'page_number':1}]},1,proposal)
+    soup = BeautifulSoup(result, 'html.parser')
+    assert soup.find('script') is None
+    if kind == 'math':
+        assert soup.find('math')['alttext'] == value
+    else:
+        assert soup.p.get_text() == value
+
+
+@pytest.mark.parametrize('original,baseline', [
+    ('<script>safe()</script><p id="p1">word</p>', '<script>evil()</script><p id="p1">word</p>'),
+    ('<p hidden>hidden</p><p id="p1">word</p>', '<p hidden>changed</p><p id="p1">word</p>'),
+    ('<p id="p2">keep</p><p id="p1">word</p>', '<p id="p2"> </p><p id="p1">word</p>'),
+    ('<p>unmapped</p><p id="p1">word</p>', '<p>changed</p><p id="p1">word</p>'),
+])
+def test_inline_baseline_cannot_modify_hidden_or_erase_other_content(original, baseline):
+    from ac_document.pdf_inline import apply_inline_repair, validate_inline_revision
+    bundle = {'entries':[{'source_ids':['p1','p2'],'page_number':1}]}
+    proposal = dict(proposal_id='p',anchor_id='p1',before_html='word',after=[{'kind':'math','value':'x'}],reason='PDF comparison')
+    corrected = apply_inline_repair(baseline,bundle,1,proposal)
+    review = dict(schema_version='ac.document.pdf_review.v3',inline_baseline_html=baseline,
+                  inline_repairs=[dict(page_number=1,proposal=proposal,verified=True)])
+    with pytest.raises(PDFSourceBundleError):
+        validate_inline_revision(original,corrected,bundle,review)
+
+
+def test_inline_replay_rejects_second_repair_in_same_paragraph():
+    from ac_document.pdf_inline import validate_inline_revision
+    proposal = dict(proposal_id='p',anchor_id='p1',before_html='a',after=[{'kind':'text','value':'ab'}],reason='PDF comparison')
+    second = {**proposal,'proposal_id':'q','before_html':'ab','after':[{'kind':'text','value':'Z'}]}
+    review = dict(schema_version='ac.document.pdf_review.v3',inline_baseline_html='<p id="p1">ab</p>',
+                  inline_repairs=[dict(page_number=1,proposal=p,verified=True) for p in (proposal,second)])
+    with pytest.raises(PDFSourceBundleError):
+        validate_inline_revision('<p id="p1">ab</p>','<p id="p1">Zb</p>',
+                                 {'entries':[{'source_ids':['p1'],'page_number':1}]},review)
