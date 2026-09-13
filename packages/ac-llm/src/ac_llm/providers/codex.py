@@ -79,6 +79,7 @@ class CodexAdapter:
 
             prompt, _ = materialized_prompt(request.workspace)
             argv.extend(["--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "-c", "default_tools_enabled=false", "--disable", "multi_agent"])
+            argv.extend(_local_app_web_search_flags(request.capabilities))
             for item in request.inputs:
                 if item.media_type.startswith("image/"):
                     argv.extend(["--image", str(item.path)])
@@ -265,6 +266,7 @@ class CodexAdapter:
 
             prompt, _ = materialized_prompt(request.workspace)
             argv.extend(["--ignore-user-config", "--ignore-rules", "-c", 'sandbox_mode="read-only"', "-c", "default_tools_enabled=false", "--disable", "multi_agent"])
+            argv.extend(_local_app_web_search_flags(request.capabilities))
             for item in request.inputs:
                 if item.media_type.startswith("image/"):
                     argv.extend(["--image", str(item.path)])
@@ -624,3 +626,10 @@ def _integer(value: Any) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0
         else None
     )
+
+
+def _local_app_web_search_flags(capabilities: Mapping[str, Any]) -> list[str]:
+    # Codex's explicit web-search setting is independent of default tools.
+    # Keep file/shell and multi-agent access disabled even when web is allowed.
+    mode = "live" if capabilities.get("internet") is True else "disabled"
+    return ["-c", f'web_search="{mode}"', "--disable", "shell_tool"]

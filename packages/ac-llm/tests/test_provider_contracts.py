@@ -1014,3 +1014,25 @@ def test_codex_checks_final_prompt_size_before_process_start(tmp_path):
     assert not error.value.retryable
     assert error.value.details == {'code': 'input_too_large',
                                    'max_chars': 1_048_576, 'actual_chars': 1_048_577}
+
+
+@pytest.mark.parametrize("internet,expected", [(None, "disabled"), (False, "disabled"), (True, "live"), ("true", "disabled")])
+def test_codex_local_app_only_enables_explicit_native_web_search(tmp_path, monkeypatch, internet, expected):
+    from ac_llm.providers import materialized
+    monkeypatch.setattr(materialized, "materialized_prompt", lambda workspace: ("Use verified input.", None))
+    workspace = _workspace(tmp_path)
+    runner = FakeRunner(b'{"type":"thread.started","thread_id":"thread-1"}\n', last_message=b'{"ok":true}')
+    adapter = CodexAdapter(binary="fake-codex", runner=runner, env={})
+    capabilities = {"execution_profile": "local_app"}
+    if internet is not None:
+        capabilities["internet"] = internet
+    started = adapter.start(ProviderRequest("prompt", "model", None, capabilities, 3, workspace), Observer(), Stop())
+    adapter.resume(started.native_handle, ProviderResumeRequest("next", None, capabilities, 3, workspace), Observer(), Stop())
+    for call in runner.calls:
+        argv = call["argv"]
+        assert f'web_search="{expected}"' in argv
+        assert 'default_tools_enabled=false' in argv
+        assert '--dangerously-bypass-approvals-and-sandbox' not in argv
+        assert '--ignore-user-config' in argv and '--ignore-rules' in argv
+        assert {argv[i + 1] for i, value in enumerate(argv) if value == '--disable'} == {'shell_tool', 'multi_agent'}
+        assert ('--sandbox' in argv and argv[argv.index('--sandbox') + 1] == 'read-only') or 'sandbox_mode="read-only"' in argv

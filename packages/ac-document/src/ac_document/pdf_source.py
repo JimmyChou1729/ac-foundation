@@ -171,6 +171,7 @@ def _review_mode(review):
     if review.get("schema_version") not in {
         "ac.document.pdf_review.v1",
         "ac.document.pdf_review.v2",
+        "ac.document.pdf_review.v3",
     }:
         return None
     if (
@@ -180,7 +181,7 @@ def _review_mode(review):
     ):
         return "human"
     if (
-        review.get("schema_version") == "ac.document.pdf_review.v2"
+        review.get("schema_version") in {"ac.document.pdf_review.v2", "ac.document.pdf_review.v3"}
         and review.get("reviewer") == "model"
         and review.get("approved") is False
     ):
@@ -482,7 +483,7 @@ def verify_pdf_source_bundle(manifest: str | Path) -> dict:
             or _review_mode(review) is None
             or receipt.get("review_mode", "human") != _review_mode(review)
             or (
-                review.get("schema_version") == "ac.document.pdf_review.v2"
+                review.get("schema_version") in {"ac.document.pdf_review.v2", "ac.document.pdf_review.v3"}
                 and receipt.get("uncertainty_count") != review.get("uncertainty_count")
             )
             or review.get("source_bundle_digest") != previous_digest
@@ -515,7 +516,10 @@ def verify_pdf_source_bundle(manifest: str | Path) -> dict:
             raise PDFSourceBundleError(
                 "pdf_review_invalid", "Review changed the original source bindings."
             )
-        if _structure(review_payloads[original_source_path]) != _structure(
+        if review.get("schema_version") == "ac.document.pdf_review.v3":
+            from .pdf_inline import validate_inline_revision
+            validate_inline_revision(review_payloads[original_source_path], source_payload, previous, review)
+        elif _structure(review_payloads[original_source_path]) != _structure(
             source_payload
         ):
             raise PDFSourceBundleError(
