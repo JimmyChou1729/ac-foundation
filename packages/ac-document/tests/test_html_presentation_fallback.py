@@ -55,6 +55,78 @@ def test_caption_only_figure_is_not_lost(tmp_path):
     assert "Caption without downloaded graphic." in str([b.payload for b in result.document.blocks])
 
 
+def test_latexml_inline_svg_is_imported_as_the_figure_asset(tmp_path):
+    result = parse(tmp_path, '''<article><figure class="ltx_figure" id="F1">
+      <span class="ltx_inline-block"><svg id="F1.pic1" class="ltx_picture"
+          width="120" height="60" viewBox="0 0 120 60">
+        <path d="M0 0 L120 60"></path>
+        <foreignObject x="10" y="10" width="80" height="20">
+          <span>axis <math><mi>x</mi></math></span>
+        </foreignObject>
+      </svg></span>
+      <figcaption>Contour diagram.</figcaption>
+    </figure></article>''')
+    document = result.document
+    figures = [
+        block for block in document.blocks
+        if block.kind is RichBlockKind.FIGURE
+    ]
+    assert len(figures) == 1
+    figure = figures[0]
+    assert figure.payload["caption"] == "Contour diagram."
+    assert figure.payload["alt_text"] == ""
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+    assert figure.payload["media_type"] == "image/svg+xml"
+    assert figure.payload["logical_name"].startswith("inline-svg-")
+    assert figure.payload["target"] == figure.payload["logical_name"]
+    assert "axis x" not in str([block.payload for block in document.blocks])
+    repository = SourceRepository(tmp_path / "cache")
+    stored = repository.get_asset(figure.payload["asset_digest"])
+    svg = repository.read_asset_bytes(stored).decode()
+    assert 'viewBox="0 0 120 60"' in svg
+    assert 'xmlns="http://www.w3.org/2000/svg"' in svg
+    assert 'xmlns="http://www.w3.org/1999/xhtml"' in svg
+    assert 'xmlns="http://www.w3.org/1998/Math/MathML"' in svg
+    assert document_diagnostics(document)["visible_content"]["unaccounted"] == 0
+
+
+def test_latexml_svg_backed_math_uses_visual_projection_instead_of_pgf_tex(
+    tmp_path,
+):
+    result = parse(tmp_path, r'''<article><table id="E67" class="ltx_equation">
+      <tr class="ltx_equation ltx_eqn_row"><td>
+        <math id="E67.m1" display="block"
+            alttext="\hbox{\pgfpicture\lxSVG@drawpath@unclipped}">
+          <semantics><mrow>
+            <mtext><svg width="80" height="32" viewBox="0 0 80 32">
+              <path d="M0 16 L80 16"></path>
+              <foreignObject x="20" y="2" width="20" height="20">
+                <span><math><mi>x</mi></math></span>
+              </foreignObject>
+            </svg></mtext><mo>=</mo><mi>x</mi>
+          </mrow><annotation encoding="application/x-tex">
+            \hbox{\pgfpicture\lxSVG@drawpath@unclipped}
+          </annotation></semantics>
+        </math>
+      </td><td class="ltx_eqn_eqno"><span class="ltx_tag">(67)</span></td></tr>
+    </table></article>''')
+    document = result.document
+    assert [block.kind for block in document.blocks] == [RichBlockKind.FIGURE]
+    figure = document.blocks[0]
+    assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+    assert figure.payload["media_type"] == "image/svg+xml"
+    assert figure.payload["target"].startswith("inline-svg-")
+    repository = SourceRepository(tmp_path / "cache")
+    stored = repository.get_asset(figure.payload["asset_digest"])
+    svg = repository.read_asset_bytes(stored).decode()
+    assert "<foreignObject" in svg
+    assert 'xmlns="http://www.w3.org/1998/Math/MathML"' in svg
+    assert "(67)" in svg
+    assert "pgfpicture" not in svg
+    assert "lxSVG@" not in svg
+    assert document_diagnostics(document)["visible_content"]["unaccounted"] == 0
+
+
 @pytest.mark.parametrize("extra", [
     "<p>Extra source explanation.</p>",
     '<svg><path d="M0 0 L1 1"/></svg>',

@@ -4440,7 +4440,7 @@ def test_html_mixed_paragraph_preserves_embedded_video_with_auditable_fallback(
             '<svg id="drawing" aria-label="Vector diagram" viewBox="0 0 8 8">'
             '<path d="M0 0L8 8"></path></svg>',
             "drawing",
-            "",
+            None,
             "Vector diagram",
         ),
     ),
@@ -4464,7 +4464,12 @@ def test_html_standalone_rendered_media_has_auditable_figure_fallback(
     assert [block.kind for block in document.blocks] == [RichBlockKind.FIGURE]
     figure = document.blocks[0]
     assert figure.locator.source_id == source_id
-    assert figure.payload["target"] == target
+    if target is None:
+        assert figure.payload["target"].startswith("inline-svg-")
+        assert figure.payload["asset_digest"] == document.assets[0].artifact_digest
+        assert figure.payload["media_type"] == "image/svg+xml"
+    else:
+        assert figure.payload["target"] == target
     assert figure.payload["alt_text"] == alt_text
     diagnostics = document_diagnostics(document)
     assert diagnostics is not None
@@ -4498,12 +4503,13 @@ def test_html_structured_figure_preserves_every_media_with_matching_diagnostics(
     figures = [
         block for block in document.blocks if block.kind is RichBlockKind.FIGURE
     ]
-    assert [block.payload["target"] for block in figures] == [
+    targets = [block.payload["target"] for block in figures]
+    assert targets[:3] == [
         "image.png",
         "video.mp4",
         "audio.ogg",
-        "",
     ]
+    assert targets[3].startswith("inline-svg-")
     diagnostics = document_diagnostics(document)
     assert diagnostics is not None
     media_diagnostics = [
@@ -4746,6 +4752,42 @@ def test_html_visible_ownership_accounts_once_for_navigation_and_article_sibling
         if item["category"] in {"navigation", "outside_content"}
     ]
     assert len(excluded) == len(set(excluded))
+
+
+def test_html_visible_ownership_counts_latexml_equation_fallback_as_a_group(
+    tmp_path,
+):
+    repository = SourceRepository(tmp_path / "cache")
+    document = RichDocumentParserService(repository).parse_source(
+        _store(
+            repository,
+            b"""
+            <article>
+              <span class="ltx_p">Before
+                <span id="E1" class="ltx_equation ltx_eqn_table">
+                  <span><span class="ltx_equation ltx_eqn_row">
+                    <span class="ltx_eqn_cell ltx_eqn_center_padleft"></span>
+                    <span class="ltx_eqn_cell ltx_align_center">
+                      <math display="block" alttext="x=1">
+                        <semantics><mi>x</mi><annotation encoding="application/x-tex">x=1</annotation></semantics>
+                      </math>
+                    </span>
+                    <span class="ltx_eqn_cell ltx_eqn_center_padright"></span>
+                    <span class="ltx_eqn_cell ltx_eqn_eqno">(1)</span>
+                  </span></span>
+                </span>
+                After
+              </span>
+            </article>
+            """,
+            SourceFormat.HTML,
+        )
+    )
+
+    assert any(block.kind is RichBlockKind.EQUATION for block in document.blocks)
+    diagnostics = document_diagnostics(document)
+    assert diagnostics is not None
+    assert diagnostics["visible_content"]["unaccounted"] == 0
 
 
 def test_visible_ownership_reports_a_real_set_difference_before_validation():

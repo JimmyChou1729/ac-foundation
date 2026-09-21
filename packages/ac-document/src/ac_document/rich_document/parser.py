@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import mimetypes
 import re
@@ -370,7 +371,10 @@ def parse_rich_artifact_bytes(
     warnings: list[str] = []
 
     def import_asset(target: str) -> RichAsset | None:
-        if not _is_local_asset_target(target):
+        if not (
+            _is_local_asset_target(target)
+            or _is_inline_svg_asset_target(target)
+        ):
             return None
         if asset_importer is None:
             warnings.append(f"local asset was not imported: {target}")
@@ -1414,7 +1418,240 @@ def _html_svg_has_drawing_content(node: Tag) -> bool:
     )
 
 
+_INLINE_SVG_ASSET_PREFIX = "data:image/svg+xml;base64,"
+_INLINE_SVG_ASSET_LIMIT = 10 * 1024 * 1024
+
+
+def _html_inline_svg_sources(text: str) -> tuple[str, ...]:
+    """Return exact inline SVG source slices in document order."""
+
+    tokens = re.finditer(r"<\s*/?\s*svg\b[^>]*>", text, re.IGNORECASE)
+    stack: list[int] = []
+    spans: list[tuple[int, int]] = []
+    for match in tokens:
+        token = match.group(0)
+        if re.match(r"<\s*/", token):
+            if not stack:
+                return ()
+            spans.append((stack.pop(), match.end()))
+        elif token.rstrip().endswith("/>"):
+            spans.append((match.start(), match.end()))
+        else:
+            stack.append(match.start())
+    if stack:
+        return ()
+    return tuple(text[start:end] for start, end in sorted(spans))
+
+
+def _html_standalone_svg(source: str) -> str:
+    """Add namespaces required when an inline HTML SVG becomes an image."""
+
+    def add_namespace(match: re.Match[str] | str, namespace: str) -> str:
+        tag = match.group(0) if isinstance(match, re.Match) else match
+        if re.search(r"\sxmlns\s*=", tag, re.IGNORECASE):
+            return tag
+        suffix = "/>" if tag.rstrip().endswith("/>") else ">"
+        return tag[:-len(suffix)] + f' xmlns="{namespace}"{suffix}'
+
+    source = re.sub(
+        r"<svg\b[^>]*>",
+        lambda match: add_namespace(match, "http://www.w3.org/2000/svg"),
+        source,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+    def foreign_object_child(match: re.Match[str]) -> str:
+        prefix, child = match.groups()
+        return prefix + add_namespace(
+            child,
+            "http://www.w3.org/1999/xhtml",
+        )
+
+    source = re.sub(
+        r"(<foreignObject\b[^>]*>\s*)(<[A-Za-z][^>]*>)",
+        foreign_object_child,
+        source,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"<math\b[^>]*>",
+        lambda match: add_namespace(
+            match,
+            "http://www.w3.org/1998/Math/MathML",
+        ),
+        source,
+        flags=re.IGNORECASE,
+    )
+
+
+def _html_svg_backed_math_asset_target(
+    node: Tag | tuple[Tag, ...],
+    *,
+    label: str = "",
+) -> str:
+    """Preserve SVG-backed MathML instead of exposing PGF internals to KaTeX."""
+
+    math_nodes = (node,) if isinstance(node, Tag) else node
+    svg_nodes = [
+        value
+        for math_node in math_nodes
+        for value in math_node.find_all("svg")
+        if isinstance(value, Tag) and _html_svg_has_drawing_content(value)
+    ]
+    if not svg_nodes:
+        return ""
+
+    math_markups: list[str] = []
+    external_math_characters = 0
+    svg_index = 0
+    for math_node in math_nodes:
+        parsed = BeautifulSoup(str(math_node), "html.parser")
+        math = parsed.find("math")
+        if not isinstance(math, Tag):
+            return ""
+        math.attrs.pop("alttext", None)
+        math.attrs.pop("alt", None)
+        math.attrs.pop("id", None)
+        for annotation in math.find_all("annotation"):
+            annotation.decompose()
+        for unsafe in math.find_all(
+            ["script", "iframe", "object", "embed", "link"]
+        ):
+            unsafe.decompose()
+        for descendant in math.find_all(True):
+            for attribute in tuple(descendant.attrs):
+                if str(attribute).casefold().startswith("on"):
+                    descendant.attrs.pop(attribute, None)
+
+        text_projection = BeautifulSoup(str(math), "html.parser")
+        for drawing in text_projection.find_all("svg"):
+            drawing.decompose()
+        external_math_characters += len(
+            text_projection.get_text("", strip=True)
+        )
+
+        source_svgs = [
+            value
+            for value in math_node.find_all("svg")
+            if isinstance(value, Tag) and _html_svg_has_drawing_content(value)
+        ]
+        cloned_svgs = [
+            value for value in math.find_all("svg") if isinstance(value, Tag)
+        ]
+        if len(cloned_svgs) != len(source_svgs):
+            return ""
+        replacements: list[tuple[str, str]] = []
+        for clone, source_node in zip(cloned_svgs, source_svgs, strict=True):
+            placeholder = f"AC_INLINE_SVG_{svg_index}_PLACEHOLDER"
+            svg_index += 1
+            source = source_node.__dict__.get("_ac_inline_svg_source")
+            if not isinstance(source, str) or not source:
+                source = str(source_node)
+                source = re.sub(r"\bviewbox=", "viewBox=", source, flags=re.I)
+                source = re.sub(
+                    r"<(/?)foreignobject\b",
+                    r"<\1foreignObject",
+                    source,
+                    flags=re.I,
+                )
+            replacements.append((placeholder, _html_standalone_svg(source)))
+            clone.replace_with(NavigableString(placeholder))
+
+        math_markup = str(math)
+        math_markup = re.sub(
+            r"<math\b",
+            '<math xmlns="http://www.w3.org/1998/Math/MathML"',
+            math_markup,
+            count=1,
+            flags=re.I,
+        )
+        for placeholder, source in replacements:
+            math_markup = math_markup.replace(placeholder, source)
+        math_markups.append(math_markup)
+
+    def dimension(value: object) -> float:
+        match = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", str(value or ""))
+        return float(match.group(1)) if match else 0.0
+
+    drawing_width = sum(dimension(svg.get("width")) for svg in svg_nodes)
+    drawing_height = max(
+        (dimension(svg.get("height")) for svg in svg_nodes),
+        default=0.0,
+    )
+    width = min(
+        4096,
+        max(
+            240,
+            int(
+                drawing_width
+                + 10 * external_math_characters
+                + 80
+                + 8 * max(0, len(math_nodes) - 1)
+                + 8 * len(label)
+            ),
+        ),
+    )
+    height = min(800, max(72, int(drawing_height + 44)))
+    safe_label = (
+        re.sub(r"[^0-9A-Za-z.()\-–— ]", "", label).strip()
+        if label
+        else ""
+    )
+    label_markup = (
+        '<span style="margin-left:auto;padding:0 12px;color:#5f6b7a;'
+        'font:16px system-ui,sans-serif">'
+        f"({safe_label})</span>"
+        if safe_label
+        else ""
+    )
+    payload = (
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f'<foreignObject x="0" y="0" width="{width}" height="{height}">'
+        '<div xmlns="http://www.w3.org/1999/xhtml" '
+        f'style="box-sizing:border-box;width:{width}px;height:{height}px;'
+        'display:flex;align-items:center;justify-content:center;overflow:visible;'
+        'color:#111;font:18px STIX Two Math,Cambria Math,serif">'
+        '<div style="flex:1;display:flex;align-items:center;justify-content:center;'
+        'gap:8px">'
+        + "".join(math_markups)
+        + "</div>"
+        f"{label_markup}</div></foreignObject></svg>"
+    ).encode("utf-8")
+    if len(payload) > _INLINE_SVG_ASSET_LIMIT:
+        return ""
+    return _INLINE_SVG_ASSET_PREFIX + base64.b64encode(payload).decode("ascii")
+
+
+def _is_inline_svg_asset_target(target: str) -> bool:
+    return target.startswith(_INLINE_SVG_ASSET_PREFIX)
+
+
+def _inline_svg_asset_bytes(target: str) -> bytes | None:
+    if not _is_inline_svg_asset_target(target):
+        return None
+    try:
+        payload = base64.b64decode(
+            target[len(_INLINE_SVG_ASSET_PREFIX):],
+            validate=True,
+        )
+    except ValueError:
+        return None
+    if not payload or len(payload) > _INLINE_SVG_ASSET_LIMIT:
+        return None
+    return payload
+
+
 def _html_embedded_media_target(node: Tag) -> str:
+    if (node.name or "").casefold() == "svg":
+        source = node.__dict__.get("_ac_inline_svg_source")
+        if isinstance(source, str) and source:
+            payload = _html_standalone_svg(source).encode("utf-8")
+            if len(payload) <= _INLINE_SVG_ASSET_LIMIT:
+                return _INLINE_SVG_ASSET_PREFIX + base64.b64encode(payload).decode(
+                    "ascii"
+                )
     descendants = tuple(
         descendant
         for descendant in node.find_all(True)
@@ -1439,6 +1676,8 @@ def _html_embedded_media_alt_text(node: Tag) -> str:
         or node.get("title")
         or ""
     )
+    if (node.name or "").casefold() == "svg":
+        return explicit
     return explicit or _html_visible_text(node)
 
 
@@ -1903,6 +2142,17 @@ def _parse_html(
     warn: WarningEmitter,
 ) -> _HTMLParseResult:
     soup = BeautifulSoup(text, "html.parser")
+    inline_svg_sources = _html_inline_svg_sources(text)
+    inline_svg_nodes = [
+        node for node in soup.find_all("svg") if isinstance(node, Tag)
+    ]
+    if len(inline_svg_sources) == len(inline_svg_nodes):
+        for node, source in zip(
+            inline_svg_nodes,
+            inline_svg_sources,
+            strict=True,
+        ):
+            node.__dict__["_ac_inline_svg_source"] = source
     roots = html_roots(soup)
     source_errors = [node for root in roots for node in root.find_all(class_=True) if "ltx_error" in _html_classes(node)]
     if source_errors:
@@ -1941,7 +2191,8 @@ def _parse_html(
     for ordinal, event in enumerate(events):
         node = event.locator_node if isinstance(event, _HTMLFallback) else event
         ownership = None
-        if _html_values_have_visible_content([node]):
+        ownership_values = event.values if isinstance(event, _HTMLFallback) else (node,)
+        if _html_values_have_visible_content(ownership_values):
             if ownership_index >= len(content_units):
                 raise ParseError(
                     "unaccounted_html_flow",
@@ -2232,6 +2483,7 @@ def _parse_html(
                     locator=locator,
                     node=node,
                     import_asset=import_asset,
+                    represented_media=figure.represented_media,
                 )
             elif node.name == "figure":
                 _append_html_fallback_blocks(
@@ -2251,19 +2503,14 @@ def _parse_html(
                 else None,
             )
         elif node.name == "math" and str(node.get("display") or "").casefold() == "block":
-            tex = _html_math_tex(node)
-            if tex:
-                output.append(
-                    _RawBlock(
-                        RichBlockKind.EQUATION,
-                        locator,
-                        {
-                            "tex": tex,
-                            "display": True,
-                            "label": _html_displayed_equation_label(node),
-                        },
-                    )
-                )
+            embedded = _html_embedded_block(
+                locator,
+                node,
+                import_asset,
+                equation_label=_html_displayed_equation_label(node),
+            )
+            if embedded is not None:
+                output.append(embedded)
         finish_event()
         require_covered()
     if ownership_index != len(content_units):
@@ -2443,8 +2690,11 @@ def _append_html_embedded_media_fallback_blocks(
     locator: SourceLocator,
     node: Tag,
     import_asset: AssetImporter,
+    represented_media: tuple[int, ...] = (),
 ) -> None:
     for media in _html_embedded_media_fallback_nodes(node):
+        if id(media) in represented_media:
+            continue
         embedded = _html_embedded_block(
             _html_locator(media, locator.source_format),
             media,
@@ -2784,6 +3034,7 @@ def _append_html_list_block_node(
                 locator=locator,
                 node=node,
                 import_asset=import_asset,
+                represented_media=figure.represented_media,
             )
         elif node.name == "figure":
             _append_html_fallback_blocks(
@@ -3369,7 +3620,7 @@ def _html_figure_media_nodes(node: Tag) -> tuple[Tag, ...]:
     if node.name == "img":
         return (node,)
     output = []
-    for media in node.find_all(["object", "img"]):
+    for media in node.find_all(["object", "img", "svg"]):
         if not isinstance(media, Tag):
             continue
         owner = media.find_parent("figure")
@@ -3457,7 +3708,13 @@ def _html_figure_presentation(
         raise ValueError("Figure panel layout has flex children without a root")
 
     exact_graphics = [
-        media for media in media_nodes if "ltx_graphics" in _html_classes(media)
+        media
+        for media in media_nodes
+        if "ltx_graphics" in _html_classes(media)
+        or (
+            media.name == "svg"
+            and "ltx_picture" in _html_classes(media)
+        )
     ]
     if not exact_graphics:
         return neutral
@@ -3764,15 +4021,25 @@ def _html_figure_panel(
     warn: WarningEmitter,
 ) -> tuple[dict[str, Any], RichAsset | None]:
     is_object = node.name == "object"
-    target = str(node.get("data" if is_object else "src") or "")
+    is_inline_svg = node.name == "svg"
+    target = (
+        _html_embedded_media_target(node)
+        if is_inline_svg
+        else str(node.get("data" if is_object else "src") or "")
+    )
     declared_media_type = str(node.get("type") or "").casefold()
     guessed_media_type = mimetypes.guess_type(target)[0] or ""
     media_type = declared_media_type or guessed_media_type
     supported = bool(target) and (
-        not is_object or declared_media_type == "image/svg+xml"
+        is_inline_svg
+        or not is_object
+        or declared_media_type == "image/svg+xml"
     )
     asset = None
-    if supported and _is_local_asset_target(target):
+    if supported and (
+        _is_local_asset_target(target)
+        or _is_inline_svg_asset_target(target)
+    ):
         asset = import_asset(target)
         status = "available" if asset is not None else "missing"
     else:
@@ -3782,23 +4049,23 @@ def _html_figure_panel(
             f"{target or '<missing target>'}"
         )
     source_id = str(node.get("id") or "")
-    alt_text = str(
-        node.get("alt")
-        or node.get("aria-label")
-        or node.get("title")
-        or ""
+    alt_text = _html_embedded_media_alt_text(node)
+    public_target = (
+        asset.logical_name
+        if is_inline_svg and asset is not None
+        else target
     )
     return (
         {
             "panel_index": panel_index,
             "source_id": source_id,
             "selector": f"#{source_id}" if source_id else "",
-            "target": target,
+            "target": public_target,
             "media_type": asset.media_type if asset else media_type,
             "alt_text": alt_text,
             "status": status,
             "asset_digest": asset.artifact_digest if asset else "",
-            "logical_name": target,
+            "logical_name": asset.logical_name if asset else public_target,
             "size": asset.size if asset else 0,
         },
         asset,
@@ -3815,6 +4082,35 @@ def _append_html_equation_table_blocks(
     """Emit one block per visibly numbered equation, not per MathML fragment."""
 
     for unit in html_equation_table_units(node):
+        visual_target = _html_svg_backed_math_asset_target(
+            unit.math_nodes,
+            label=unit.label,
+        )
+        if visual_target:
+            asset = import_asset(visual_target)
+            public_target = asset.logical_name if asset else visual_target
+            output.append(
+                _RawBlock(
+                    RichBlockKind.FIGURE,
+                    locator,
+                    _figure_payload(
+                        asset,
+                        alt_text="",
+                        caption="",
+                        target=public_target,
+                    ),
+                    represented_media=(
+                        *(id(math) for math in unit.math_nodes),
+                        *(
+                            id(media)
+                            for math in unit.math_nodes
+                            for media in math.find_all("svg")
+                            if isinstance(media, Tag)
+                        ),
+                    ),
+                )
+            )
+            continue
         tex = normalize_tex(
             " ".join(_html_math_tex(math) for math in unit.math_nodes)
         )
@@ -4323,6 +4619,31 @@ def _html_embedded_block(
     equation_label: str = "",
 ) -> _RawBlock | None:
     if node.name == "math":
+        visual_target = _html_svg_backed_math_asset_target(
+            node,
+            label=equation_label,
+        )
+        if visual_target:
+            asset = import_asset(visual_target)
+            public_target = asset.logical_name if asset else visual_target
+            return _RawBlock(
+                RichBlockKind.FIGURE,
+                locator,
+                _figure_payload(
+                    asset,
+                    alt_text="",
+                    caption="",
+                    target=public_target,
+                ),
+                represented_media=(
+                    id(node),
+                    *(
+                        id(media)
+                        for media in node.find_all("svg")
+                        if isinstance(media, Tag)
+                    ),
+                ),
+            )
         tex = _html_math_tex(node)
         if not tex:
             return None
@@ -4338,14 +4659,20 @@ def _html_embedded_block(
     if not _html_is_embedded_media(node):
         return None
     target = _html_embedded_media_target(node)
+    asset = import_asset(target) if target else None
+    public_target = (
+        asset.logical_name
+        if node.name == "svg" and asset is not None
+        else target
+    )
     return _RawBlock(
         RichBlockKind.FIGURE,
         locator,
         _figure_payload(
-            import_asset(target) if target else None,
+            asset,
             alt_text=_html_embedded_media_alt_text(node),
             caption="",
-            target=target,
+            target=public_target,
         ),
         represented_media=(id(node),),
         presentation_fields=(
@@ -4461,6 +4788,10 @@ def _html_inline_segments_from_values(
             segments.append(value)
             return
         if value.name == "math":
+            if _html_svg_backed_math_asset_target(value):
+                flush()
+                segments.append(value)
+                return
             if (
                 str(value.get("display") or "").casefold() == "block"
             ):
@@ -5907,6 +6238,11 @@ def _html_wrapped_panel_graphic(node: Tag) -> Tag | None:
 
 def _html_figure_has_unrepresented_content(node: Tag) -> bool:
     for content in node.find_all(["svg", "math", "video", "audio", "canvas", "iframe"]):
+        if content.name == "svg" or any(
+            isinstance(parent, Tag) and parent.name == "svg"
+            for parent in content.parents
+        ):
+            continue
         if not any(
             isinstance(parent, Tag) and parent.name in {"figcaption", "object"}
             for parent in content.parents
@@ -5917,7 +6253,7 @@ def _html_figure_has_unrepresented_content(node: Tag) -> bool:
         and not isinstance(text, Comment)
         and not any(
             isinstance(parent, Tag) and parent.name in {
-                "figcaption", "object", "script", "style",
+                "figcaption", "object", "svg", "script", "style",
             }
             for parent in text.parents
         )
