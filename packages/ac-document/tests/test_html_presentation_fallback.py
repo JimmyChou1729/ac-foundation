@@ -1,9 +1,14 @@
+import importlib
+
 import pytest
 
 from ac_document import (
     RichBlockKind, RichDocumentParserService, SourceBundle, SourceFormat,
     SourceOrigin, SourceOriginKind, SourceRepository, source_presentation, document_diagnostics,
+    parse_rich_artifact_bytes,
 )
+
+rich_parser = importlib.import_module("ac_document.rich_document.parser")
 
 
 def parse(tmp_path, html):
@@ -88,6 +93,107 @@ def test_latexml_inline_svg_is_imported_as_the_figure_asset(tmp_path):
     assert 'xmlns="http://www.w3.org/1999/xhtml"' in svg
     assert 'xmlns="http://www.w3.org/1998/Math/MathML"' in svg
     assert document_diagnostics(document)["visible_content"]["unaccounted"] == 0
+
+
+def test_inline_svg_is_structurally_namespaced_and_sanitized(tmp_path):
+    result = parse(tmp_path, '''<article><svg aria-label="x > y" viewBox="0 0 8 8"
+      onclick="evil()">
+      <image href="https://bad/image.png"></image><use href="#safe"></use>
+      <linearGradient id="gradient" gradientUnits="userSpaceOnUse"
+        spreadMethod="pad"></linearGradient>
+      <filter id="filter" filterUnits="objectBoundingBox"></filter>
+      <textPath startOffset="20%" pathLength="8">axis</textPath>
+      <path id="safe" pathLength="8" d="M0 0L8 8"></path></svg></article>''')
+    figure = next(
+        block for block in result.document.blocks
+        if block.kind is RichBlockKind.FIGURE
+    )
+    repository = SourceRepository(tmp_path / "cache")
+    stored = repository.get_asset(figure.payload["asset_digest"])
+    svg = repository.read_asset_bytes(stored).decode()
+    assert 'aria-label="x &gt; y"' in svg
+    assert 'viewBox="0 0 8 8"' in svg
+    assert '<script' not in svg and 'onclick=' not in svg
+    assert 'https://bad' not in svg
+    assert 'href="#safe"' in svg
+    assert 'gradientUnits="userSpaceOnUse"' in svg
+    assert 'spreadMethod="pad"' in svg and 'filterUnits="objectBoundingBox"' in svg
+    assert 'startOffset="20%"' in svg and svg.count('pathLength="8"') == 2
+    sanitized = rich_parser._html_standalone_svg(
+        '<svg><script>evil()</script><style>.x{fill:u\\72l(https://bad)}</style>'
+        '<foreignObject><img srcset="https://bad/a 1x"/>'
+        '<form action="https://bad/post"><button>send</button></form></foreignObject>'
+        '<animate values="#safe;javascript:evil()"/>'
+        '<path style="fill:u\\72l(https://bad)" '
+        'fill="u\\72l(https://bad)" filter="u\\72l(https://bad)" '
+        'd="M0 0L1 1"/></svg>'
+    )
+    assert '<script' not in sanitized and '<style' not in sanitized
+    assert 'https://bad' not in sanitized and '<animate' not in sanitized
+    assert '<form' not in sanitized and '<button' not in sanitized
+    assert 'style=' not in sanitized
+    assert 'fill=' not in sanitized and 'filter=' not in sanitized
+    compatible = rich_parser._html_standalone_svg(
+        '<svg><foreignObject><div>a&nbsp;b<br>c<img alt="x"></div>'
+        '</foreignObject><path id="after" d="M0 0L1 1"/></svg>'
+    )
+    assert "a\xa0b" in compatible and "<br/>c" in compatible
+    assert compatible.index("</foreignObject>") < compatible.index('id="after"')
+
+
+def test_inline_svg_without_importer_has_bounded_warning_and_no_data_target(tmp_path):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = b'<article><svg><path d="M0 0L8 8"></path></svg></article>'
+    artifact = repository.store_bytes(
+        payload,
+        source_format=SourceFormat.HTML,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+    parsed = parse_rich_artifact_bytes(artifact, payload)
+    assert parsed.warnings == ("local asset was not imported: <inline SVG>",)
+    figure = next(
+        block for block in parsed.document.blocks
+        if block.kind is RichBlockKind.FIGURE
+    )
+    assert figure.payload["target"] == ""
+
+
+def test_figure_does_not_duplicate_nested_svg_fallbacks(tmp_path):
+    result = parse(tmp_path, '''<article><figure><object type="image/svg+xml"
+      data="missing.svg"><svg><svg><path d="M0 0L1 1"></path></svg></svg></object>
+      <figcaption>Fallback.</figcaption></figure></article>''')
+    figures = [
+        block for block in result.document.blocks
+        if block.kind is RichBlockKind.FIGURE
+    ]
+    assert len(figures) == 1
+    assert figures[0].payload["target"] == "missing.svg"
+
+
+@pytest.mark.parametrize("markup", [
+    '''<math display="block"><mtext><svg width="8" height="8">
+      <path d="M0 0L8 8"></path></svg></mtext></math>''',
+    '''<table class="ltx_equation"><tr class="ltx_eqn_row"><td>
+      <math display="block"><mtext><svg width="8" height="8">
+      <path d="M0 0L8 8"></path></svg></mtext></math></td>
+      <td class="ltx_eqn_eqno"><span class="ltx_tag">(1)</span></td>
+      </tr></table>''',
+])
+def test_svg_backed_math_without_importer_has_no_data_target(tmp_path, markup):
+    repository = SourceRepository(tmp_path / "cache")
+    payload = f"<article>{markup}</article>".encode()
+    artifact = repository.store_bytes(
+        payload,
+        source_format=SourceFormat.HTML,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT),
+    )
+    parsed = parse_rich_artifact_bytes(artifact, payload)
+    figure = next(
+        block for block in parsed.document.blocks
+        if block.kind is RichBlockKind.FIGURE
+    )
+    assert figure.payload["target"] == ""
+    assert parsed.warnings == ("local asset was not imported: <inline SVG>",)
 
 
 def test_latexml_svg_backed_math_uses_visual_projection_instead_of_pgf_tex(

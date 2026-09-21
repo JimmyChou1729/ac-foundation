@@ -4,6 +4,7 @@ import base64
 import hashlib
 import mimetypes
 import re
+from html.parser import HTMLParser
 from math import gcd
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -377,11 +378,21 @@ def parse_rich_artifact_bytes(
         ):
             return None
         if asset_importer is None:
-            warnings.append(f"local asset was not imported: {target}")
+            display_target = (
+                "<inline SVG>"
+                if _is_inline_svg_asset_target(target)
+                else target
+            )
+            warnings.append(f"local asset was not imported: {display_target}")
             return None
         asset = asset_importer(target)
         if asset is None:
-            warnings.append(f"local asset was not found: {target}")
+            display_target = (
+                "<inline SVG>"
+                if _is_inline_svg_asset_target(target)
+                else target
+            )
+            warnings.append(f"local asset was not found: {display_target}")
             return None
         assets.setdefault(asset.artifact_digest, asset)
         return asset
@@ -1425,64 +1436,192 @@ _INLINE_SVG_ASSET_LIMIT = 10 * 1024 * 1024
 def _html_inline_svg_sources(text: str) -> tuple[str, ...]:
     """Return exact inline SVG source slices in document order."""
 
-    tokens = re.finditer(r"<\s*/?\s*svg\b[^>]*>", text, re.IGNORECASE)
-    stack: list[int] = []
-    spans: list[tuple[int, int]] = []
-    for match in tokens:
-        token = match.group(0)
-        if re.match(r"<\s*/", token):
-            if not stack:
-                return ()
-            spans.append((stack.pop(), match.end()))
-        elif token.rstrip().endswith("/>"):
-            spans.append((match.start(), match.end()))
-        else:
-            stack.append(match.start())
-    if stack:
+    line_offsets = [0]
+    for match in re.finditer("\n", text):
+        line_offsets.append(match.end())
+
+    class SVGSourceParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+            self.stack: list[int] = []
+            self.spans: list[tuple[int, int]] = []
+            self.invalid = False
+
+        def source_offset(self) -> int:
+            line, column = self.getpos()
+            return line_offsets[line - 1] + column
+
+        def handle_starttag(self, tag: str, _attrs) -> None:
+            if tag.casefold() == "svg":
+                self.stack.append(self.source_offset())
+
+        def handle_startendtag(self, tag: str, _attrs) -> None:
+            if tag.casefold() == "svg":
+                raw = self.get_starttag_text() or ""
+                start = self.source_offset()
+                self.spans.append((start, start + len(raw)))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.casefold() != "svg":
+                return
+            if not self.stack:
+                self.invalid = True
+                return
+            start = self.stack.pop()
+            end = text.find(">", self.source_offset())
+            if end < 0:
+                self.invalid = True
+                return
+            self.spans.append((start, end + 1))
+
+    parser = SVGSourceParser()
+    try:
+        parser.feed(text)
+        parser.close()
+    except (AssertionError, ValueError):
         return ()
-    return tuple(text[start:end] for start, end in sorted(spans))
+    if parser.invalid or parser.stack:
+        return ()
+    return tuple(text[start:end] for start, end in sorted(parser.spans))
 
 
 def _html_standalone_svg(source: str) -> str:
-    """Add namespaces required when an inline HTML SVG becomes an image."""
+    """Return a self-contained, inert SVG suitable for an image asset."""
 
-    def add_namespace(match: re.Match[str] | str, namespace: str) -> str:
-        tag = match.group(0) if isinstance(match, re.Match) else match
-        if re.search(r"\sxmlns\s*=", tag, re.IGNORECASE):
-            return tag
-        suffix = "/>" if tag.rstrip().endswith("/>") else ">"
-        return tag[:-len(suffix)] + f' xmlns="{namespace}"{suffix}'
-
-    source = re.sub(
-        r"<svg\b[^>]*>",
-        lambda match: add_namespace(match, "http://www.w3.org/2000/svg"),
-        source,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-
-    def foreign_object_child(match: re.Match[str]) -> str:
-        prefix, child = match.groups()
-        return prefix + add_namespace(
-            child,
-            "http://www.w3.org/1999/xhtml",
+    parsed = BeautifulSoup(source, "html.parser")
+    svg = parsed.find("svg")
+    if not isinstance(svg, Tag):
+        return ""
+    unsafe_names = {
+        "script", "iframe", "object", "embed", "link", "meta",
+        "form", "input", "button", "select", "textarea",
+        "animate", "animatemotion", "animatetransform", "set", "discard",
+    }
+    for unsafe in reversed(tuple(svg.find_all(True))):
+        if (unsafe.name or "").casefold() in unsafe_names:
+            unsafe.decompose()
+    for style in svg.find_all(
+        lambda value: (value.name or "").casefold() == "style"
+    ):
+        css = style.get_text("", strip=False)
+        if not _html_safe_svg_css(css):
+            style.decompose()
+    case_sensitive_names = {
+        value.casefold(): value
+        for value in (
+            "altGlyph", "altGlyphDef", "altGlyphItem", "animateColor",
+            "animateMotion", "animateTransform", "clipPath", "feBlend",
+            "feColorMatrix", "feComponentTransfer", "feComposite",
+            "feConvolveMatrix", "feDiffuseLighting", "feDisplacementMap",
+            "feDistantLight", "feDropShadow", "feFlood", "feFuncA",
+            "feFuncB", "feFuncG", "feFuncR", "feGaussianBlur", "feImage",
+            "feMerge", "feMergeNode", "feMorphology", "feOffset",
+            "fePointLight", "feSpecularLighting", "feSpotLight", "feTile",
+            "feTurbulence", "foreignObject", "glyphRef", "linearGradient",
+            "radialGradient", "textPath",
         )
+    }
+    case_sensitive_attributes = {
+        value.casefold(): value
+        for value in (
+            "attributeName", "attributeType", "baseFrequency", "baseProfile",
+            "calcMode", "clipPathUnits", "contentScriptType",
+            "contentStyleType", "diffuseConstant", "edgeMode",
+            "externalResourcesRequired", "filterRes", "filterUnits", "glyphRef",
+            "gradientTransform", "gradientUnits",
+            "kernelMatrix", "kernelUnitLength", "keyPoints", "keySplines",
+            "keyTimes", "lengthAdjust", "limitingConeAngle", "markerHeight",
+            "markerUnits", "markerWidth", "maskContentUnits", "maskUnits",
+            "numOctaves", "pathLength", "patternContentUnits",
+            "patternTransform", "patternUnits", "pointsAtX", "pointsAtY",
+            "pointsAtZ", "preserveAlpha", "preserveAspectRatio",
+            "primitiveUnits", "refX", "refY", "repeatCount", "repeatDur",
+            "requiredExtensions", "requiredFeatures", "specularConstant",
+            "specularExponent", "spreadMethod", "startOffset", "stdDeviation",
+            "stitchTiles", "surfaceScale", "systemLanguage", "tableValues",
+            "targetX", "targetY", "textLength", "viewBox", "viewTarget",
+            "xChannelSelector", "yChannelSelector", "zoomAndPan",
+        )
+    }
+    for element in (svg, *svg.find_all(True)):
+        canonical_name = case_sensitive_names.get((element.name or "").casefold())
+        if canonical_name:
+            element.name = canonical_name
+        for attribute in tuple(element.attrs):
+            folded = str(attribute).casefold()
+            value = " ".join(element.get(attribute, [])) if isinstance(
+                element.get(attribute), list
+            ) else str(element.get(attribute) or "")
+            if folded.startswith("on") or re.match(
+                r"\s*javascript\s*:",
+                value,
+                re.I,
+            ):
+                element.attrs.pop(attribute, None)
+                continue
+            if folded in {
+                "action", "background", "cite", "formaction", "longdesc",
+                "poster", "srcset",
+            }:
+                element.attrs.pop(attribute, None)
+                continue
+            if folded in {"href", "xlink:href", "src"}:
+                safe_fragment = value.strip().startswith("#")
+                safe_raster = bool(
+                    re.match(
+                        r"\s*data:image/(?:png|jpe?g|gif|webp);base64,",
+                        value,
+                        re.I,
+                    )
+                )
+                if not (safe_fragment or safe_raster):
+                    element.attrs.pop(attribute, None)
+                    continue
+            if folded == "style" and not _html_safe_svg_css(value):
+                element.attrs.pop(attribute, None)
+                continue
+            if folded in {
+                "clip-path", "color-profile", "cursor", "fill", "filter",
+                "marker", "marker-end", "marker-mid", "marker-start", "mask",
+                "stroke",
+            } and not _html_safe_svg_css(value):
+                element.attrs.pop(attribute, None)
+                continue
+            if re.search(r"url\s*\((?!\s*['\"]?#)", value, re.I):
+                element.attrs.pop(attribute, None)
+                continue
+            canonical_attribute = case_sensitive_attributes.get(folded)
+            if canonical_attribute and canonical_attribute != attribute:
+                element.attrs[canonical_attribute] = element.attrs.pop(attribute)
+    svg.attrs.setdefault("xmlns", "http://www.w3.org/2000/svg")
+    for foreign_object in svg.find_all(
+        lambda value: (value.name or "").casefold() == "foreignobject"
+    ):
+        child = next(
+            (value for value in foreign_object.children if isinstance(value, Tag)),
+            None,
+        )
+        if isinstance(child, Tag):
+            child.attrs.setdefault("xmlns", "http://www.w3.org/1999/xhtml")
+    for math in svg.find_all(
+        lambda value: (value.name or "").casefold() == "math"
+    ):
+        math.attrs.setdefault("xmlns", "http://www.w3.org/1998/Math/MathML")
+    return str(svg)
 
-    source = re.sub(
-        r"(<foreignObject\b[^>]*>\s*)(<[A-Za-z][^>]*>)",
-        foreign_object_child,
-        source,
-        flags=re.IGNORECASE,
+
+def _html_safe_svg_css(value: str) -> bool:
+    """Allow static SVG CSS and same-document paint-server references only."""
+
+    if re.search(r"\\|/\*|@|expression\s*\(|(?:https?:|//|data:|javascript:)", value, re.I):
+        return False
+    without_local_urls = re.sub(
+        r"url\s*\(\s*(['\"]?)#[A-Za-z_][\w.:-]*\1\s*\)",
+        "",
+        value,
+        flags=re.I,
     )
-    return re.sub(
-        r"<math\b[^>]*>",
-        lambda match: add_namespace(
-            match,
-            "http://www.w3.org/1998/Math/MathML",
-        ),
-        source,
-        flags=re.IGNORECASE,
-    )
+    return re.search(r"\burl\b", without_local_urls, re.I) is None
 
 
 def _html_svg_backed_math_asset_target(
@@ -1555,7 +1694,10 @@ def _html_svg_backed_math_asset_target(
                     source,
                     flags=re.I,
                 )
-            replacements.append((placeholder, _html_standalone_svg(source)))
+            sanitized = _html_standalone_svg(source)
+            if not sanitized:
+                return ""
+            replacements.append((placeholder, sanitized))
             clone.replace_with(NavigableString(placeholder))
 
         math_markup = str(math)
@@ -1648,7 +1790,7 @@ def _html_embedded_media_target(node: Tag) -> str:
         source = node.__dict__.get("_ac_inline_svg_source")
         if isinstance(source, str) and source:
             payload = _html_standalone_svg(source).encode("utf-8")
-            if len(payload) <= _INLINE_SVG_ASSET_LIMIT:
+            if payload and len(payload) <= _INLINE_SVG_ASSET_LIMIT:
                 return _INLINE_SVG_ASSET_PREFIX + base64.b64encode(payload).decode(
                     "ascii"
                 )
@@ -3637,6 +3779,13 @@ def _html_figure_media_nodes(node: Tag) -> tuple[Tag, ...]:
                 continue
         if media.name == "img" and isinstance(media.find_parent("object"), Tag):
             continue
+        if any(
+            isinstance(parent, Tag)
+            and parent is not node
+            and parent.name in {"object", "svg"}
+            for parent in media.parents
+        ):
+            continue
         output.append(media)
     return tuple(output)
 
@@ -4053,7 +4202,7 @@ def _html_figure_panel(
     public_target = (
         asset.logical_name
         if is_inline_svg and asset is not None
-        else target
+        else "" if is_inline_svg else target
     )
     return (
         {
@@ -4088,7 +4237,7 @@ def _append_html_equation_table_blocks(
         )
         if visual_target:
             asset = import_asset(visual_target)
-            public_target = asset.logical_name if asset else visual_target
+            public_target = asset.logical_name if asset else ""
             output.append(
                 _RawBlock(
                     RichBlockKind.FIGURE,
@@ -4625,7 +4774,7 @@ def _html_embedded_block(
         )
         if visual_target:
             asset = import_asset(visual_target)
-            public_target = asset.logical_name if asset else visual_target
+            public_target = asset.logical_name if asset else ""
             return _RawBlock(
                 RichBlockKind.FIGURE,
                 locator,
@@ -4663,7 +4812,7 @@ def _html_embedded_block(
     public_target = (
         asset.logical_name
         if node.name == "svg" and asset is not None
-        else target
+        else "" if node.name == "svg" else target
     )
     return _RawBlock(
         RichBlockKind.FIGURE,
