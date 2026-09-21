@@ -19,7 +19,12 @@ from ..sources import (
     ValidationPolicy,
 )
 from .models import RichAsset, RichBlockKind, RichDocument, RichPageMapEntry
-from .parser import AssetImporter, parse_rich_artifact_bytes, resolve_local_asset_path
+from .parser import (
+    AssetImporter,
+    _inline_svg_asset_bytes,
+    parse_rich_artifact_bytes,
+    resolve_local_asset_path,
+)
 
 
 PDF_VALIDATOR_MISSING_WARNING = (
@@ -205,6 +210,20 @@ class RichDocumentParserService:
                 imported = self.asset_importer(target)
                 if imported is not None:
                     return imported
+            inline_svg = _inline_svg_asset_bytes(target)
+            if inline_svg is not None:
+                stored = self.repository.store_asset_bytes(
+                    inline_svg,
+                    media_type="image/svg+xml",
+                )
+                return RichAsset(
+                    artifact_digest=stored.artifact_digest,
+                    media_type=stored.media_type,
+                    logical_name=(
+                        f"inline-svg-{stored.artifact_digest[:24]}.svg"
+                    ),
+                    size=stored.size,
+                )
             if not source_locator:
                 return None
             path = resolve_local_asset_path(source_locator, target)
