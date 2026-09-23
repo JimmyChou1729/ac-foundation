@@ -1,5 +1,6 @@
 from decimal import Decimal
 from ac_llm.reference_pricing import api_reference_cost
+from ac_llm.config import DEFAULT_MODELS
 
 
 def test_luna_cache_prices_and_missing_cache_semantics():
@@ -67,3 +68,20 @@ def test_anthropic_cache_write_ttl_remains_a_range():
         Decimal(".0039"),
         Decimal(".0054"),
     ]
+
+
+def test_current_codex_defaults_have_official_reference_prices():
+    usage = {
+        'input_tokens': 10_000,
+        'output_tokens': 10_000,
+        'cached_input_tokens': 0,
+        'cache_write_tokens': 0,
+        'input_includes_cache': True,
+    }
+    prices = {'gpt-6-luna': Decimal('0.006'), 'gpt-6-sol': Decimal('0.12')}
+    for model in set(DEFAULT_MODELS['codex'].values()):
+        result = api_reference_cost(model, usage)
+        assert Decimal(result['amount_range'][0]) == prices[model]
+        assert result['amount_range'][0] == result['amount_range'][1]
+        assert result['source'] == 'https://developers.openai.com/api/docs/pricing'
+        assert result['verified_on'] == '2026-09-23'

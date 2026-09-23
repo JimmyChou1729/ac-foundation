@@ -67,6 +67,6 @@ def test_reasoning_effort_is_independent_from_default_model_routing() -> None:
         ModelSelection("codex", reasoning_effort="high")
     )
 
-    assert resolved.model == "gpt-5.6-luna"
+    assert resolved.model == "gpt-6-luna"
     assert resolved.tier == "medium"
     assert resolved.reasoning_effort == "high"
