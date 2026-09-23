@@ -228,6 +228,22 @@ def _stop(process):
     process.wait()
 
 
+def _local_command(executable):
+    """Wrap only the recognized Python console entry; preserve custom launchers."""
+    try:
+        with Path(executable).open('rb') as stream:
+            script = stream.read(8192).decode('utf-8')
+        first = script.splitlines()[0]
+        interpreter = first[2:].strip() if first.startswith('#!') else ''
+        if (Path(interpreter).is_absolute() and Path(interpreter).is_file()
+            and Path(interpreter).name.startswith('python')
+            and 'from mineru.cli.client import main' in script):
+            return [interpreter, str(Path(__file__).with_name('mineru_cli_compat.py')), executable]
+    except (OSError, UnicodeError, IndexError):
+        pass
+    return [executable]
+
+
 def _version(executable, deadline=None):
     try:
         result = subprocess.run(
@@ -476,8 +492,7 @@ def parse_pdf_mineru(
             _save(root, state)
             try:
                 process = subprocess.Popen(
-                    [
-                        config["executable"],
+                    _local_command(config["executable"]) + [
                         "-p",
                         str(root / "input.pdf"),
                         "-o",
