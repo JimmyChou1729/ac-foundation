@@ -97,7 +97,7 @@ from .workflow_support import (
     semantic_retry_request,
 )
 
-__version__ = "2.1.1"
+__version__ = "2.1.2"
 
 __all__ = [
     "claude_connection_environment",
