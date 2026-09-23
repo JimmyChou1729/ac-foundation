@@ -575,3 +575,9 @@ baseline and require an exact match to the reviewed source. Original PDF, OCR
 source, page mappings and review evidence remain attached. v1/v2 reviews retain
 their existing structure-preserving behavior; model review is never relabeled
 as human approval.
+
+The recognized MinerU 3.4.5 Python console entry runs through a compatibility
+entry using its original Python environment. Read disconnects and HTTP protocol
+read errors during status polling use MinerU's existing bounded retry loop.
+Submission POSTs and result downloads are unchanged; custom executable wrappers
+are invoked as configured. The installed MinerU package is not modified.
