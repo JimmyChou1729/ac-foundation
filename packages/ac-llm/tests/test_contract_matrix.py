@@ -117,10 +117,10 @@ def test_config_resolution_matrix_is_explicit_and_host_deterministic() -> None:
     )
     assert DEFAULT_MODELS == {
         "codex": {
-            "low": "gpt-5.6-luna",
-            "medium": "gpt-5.6-luna",
-            "high": "gpt-5.6-sol",
-            "xhigh": "gpt-5.6-sol",
+            "low": "gpt-6-luna",
+            "medium": "gpt-6-luna",
+            "high": "gpt-6-sol",
+            "xhigh": "gpt-6-sol",
         },
         "claude": {
             "low": "haiku",

@@ -13,10 +13,10 @@ PROVIDERS = ("codex", "claude", "kimi", "dsh")
 
 DEFAULT_MODELS: Mapping[str, Mapping[str, str]] = {
     "codex": {
-        "low": "gpt-5.6-luna",
-        "medium": "gpt-5.6-luna",
-        "high": "gpt-5.6-sol",
-        "xhigh": "gpt-5.6-sol",
+        "low": "gpt-6-luna",
+        "medium": "gpt-6-luna",
+        "high": "gpt-6-sol",
+        "xhigh": "gpt-6-sol",
     },
     "claude": {
         "low": "haiku",

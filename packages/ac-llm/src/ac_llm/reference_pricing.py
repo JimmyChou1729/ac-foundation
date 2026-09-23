@@ -10,6 +10,8 @@ ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
 # Standard, global API rates per million tokens. CLI subscription fees are separate.
 _CARDS = {
     "gpt-6-astra": ("10", "50", "1", "12.5", OPENAI_SOURCE, 272000),
+    "gpt-6-sol": ("2", "10", ".2", "2.5", OPENAI_SOURCE, 272000, "2026-09-23"),
+    "gpt-6-luna": (".1", ".5", ".01", ".125", OPENAI_SOURCE, 272000, "2026-09-23"),
     "gpt-5.6-sol": ("4", "20", ".4", "5", OPENAI_SOURCE, 272000),
     "gpt-5.6-terra": ("2", "12", ".2", "2.5", OPENAI_SOURCE, 272000),
     "gpt-5.6-luna": (".2", "1.2", ".02", ".25", OPENAI_SOURCE, 272000),
@@ -30,7 +32,7 @@ def api_reference_cost(model: str, usage: dict) -> dict:
         "amount_range": None,
         "model": model,
         "source": card[4] if card else None,
-        "verified_on": VERIFIED_ON,
+        "verified_on": card[6] if card and len(card) > 6 else VERIFIED_ON,
         "basis": "official_standard_api_reference",
         "currency": "USD",
         "billed_amount": None,
