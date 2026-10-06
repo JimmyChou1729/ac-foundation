@@ -114,3 +114,11 @@ Workflow adapters can use `LLMClient.run_id_for(request)` before calling
 `generate` to inspect a previous run without starting an attempt. An adapter
 that automatically retries should preserve an existing stop request or a pause
 requiring supervisory input; only an explicit resume clears that stop boundary.
+
+`ac-llm doctor --provider host --environment --project-dir <project>` reports
+Python support, Git availability, declared source roots, proxy schemes, optional
+SOCKS support, coordinator capabilities, and a temporary write probe. Proxy
+addresses and credentials are excluded. Network reachability and authentication
+are not tested, and a coordinator declaration is not proof of live host tools.
+HTTPX clients using SOCKS need an explicit `httpx[socks]` installation in their
+chosen environment; no diagnostic command installs packages.

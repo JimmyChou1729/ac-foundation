@@ -9,6 +9,7 @@ from ac_jobs import (
 
 from .claude_config import claude_connection_environment
 from .host_execution import HostCoordinator
+from .environment_doctor import environment_diagnostics
 from .host_tasks import HostTaskService
 from .api import LLMClient, LLMRunResult, LLMRunView, LLMTaskService
 from .errors import (
@@ -181,6 +182,7 @@ __all__ = [
     "decode_request",
     "decode_resume_input",
     "execute_or_resume_matching",
+    "environment_diagnostics",
     "request_to_document",
     "resume_input_matches",
     "resume_input_to_document",

@@ -133,6 +133,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="provider to diagnose (default: auto)",
     )
+    doctor.add_argument("--environment", action="store_true", help="include offline runtime, proxy, and host checks")
+    doctor.add_argument("--project-dir", type=Path, help="probe write access in an existing project directory")
     for name, help_text in (
         ("host-pending", "list model tasks waiting for the host"),
         ("host-export", "export complete materials for one host task"),
@@ -296,6 +298,10 @@ def _dispatch(
     selection = executor._resolve_model(LLMRequest("doctor", "Diagnose provider availability.", TextOutput(),
                                                    ModelSelection(provider=args.provider)), options=options)
     diagnostic = executor._adapter(selection.provider, options).doctor()
+    environment = {}
+    if args.environment or args.project_dir is not None:
+        from .environment_doctor import environment_diagnostics
+        environment["environment"] = environment_diagnostics(project_dir=args.project_dir)
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
@@ -304,6 +310,7 @@ def _dispatch(
             "executable": diagnostic.executable,
             "prelaunch_unavailable": diagnostic.prelaunch_unavailable,
             "details": dict(diagnostic.details),
+            **environment,
         },
     )
 
