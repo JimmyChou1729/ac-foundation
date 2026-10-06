@@ -8,6 +8,8 @@ from ac_jobs import (
 )
 
 from .claude_config import claude_connection_environment
+from .host_execution import HostCoordinator
+from .host_tasks import HostTaskService
 from .api import LLMClient, LLMRunResult, LLMRunView, LLMTaskService
 from .errors import (
     AcLLMError,
@@ -100,6 +102,8 @@ from .workflow_support import (
 __version__ = "2.1.2"
 
 __all__ = [
+    "HostCoordinator",
+    "HostTaskService",
     "claude_connection_environment",
     "DEFAULT_MAX_PARALLEL_PROVIDER_CALLS",
     "RESUME_SCHEMA_VERSION",

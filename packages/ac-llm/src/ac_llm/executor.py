@@ -180,6 +180,10 @@ class LLMTaskExecutor:
                 return LLMFailed(IdempotencyConflictError())
             if state.accepted is not None:
                 return self._replay(context, request, state, options)
+        try:
+            options = self._host_options(options)
+        except AcLLMError as exc:
+            return LLMFailed(exc)
         session_key = (
             state.session_key
             if state is not None and state.session_key is not None
@@ -251,8 +255,12 @@ class LLMTaskExecutor:
                     )
             return self._drive(context, durable_request, state, store, options)
         try:
-            resolved = self._resolve_model(request)
-            adapter = self.registry.create(resolved.provider)
+            resolved = self._resolve_model(request, options=options)
+            if request.session is not None:
+                session = self._session_store(context, request.session.session_key).read()
+                if session is not None and session.provider == "host":
+                    resolved = replace(resolved, provider="host", model=session.model)
+            adapter = self._adapter(resolved.provider, options)
             scoped = self._artifacts(context, key)
             durable_request = self._canonicalize_inputs(
                 context,
@@ -326,6 +334,10 @@ class LLMTaskExecutor:
         input: ResumeInput | None,
         options: LLMExecutionOptions,
     ) -> LLMTaskOutcome:
+        try:
+            options = self._host_options(options)
+        except AcLLMError as exc:
+            return LLMFailed(exc)
         store = self._task_store(context, task_id)
         state = store.read()
         if state is None:
@@ -392,6 +404,20 @@ class LLMTaskExecutor:
             return LLMStopped()
         except AcLLMError as exc:
             return LLMFailed(exc)
+        if state.resolved_provider == "host" and state.pause.details.get("code") == "awaiting_host":
+            from .host_tasks import _store as host_store, execution_from_receipt
+
+            receipt = host_store(context, str(state.pause.details["host_task_id"])).read()
+            if receipt is None:
+                return LLMFailed(CorruptTaskStateError("The pending host task is missing."))
+            if receipt.task["llm_task_id"] == task_id:
+                if receipt.response is None:
+                    return self._paused_outcome(state.pause)
+                context.checkpoint()
+                state = replace(state, revision=state.revision + 1, pause=None)
+                store.compare_and_swap(state.revision - 1, state)
+                outcome = self._consume_execution(context, request, state, store, execution_from_receipt(receipt), options)
+                return outcome if outcome is not None else self._drive(context, request, store.read() or state, store, options)
         if input is not None and input.action is ResumeAction.ACCEPT_CANDIDATE:
             return self._accept_candidate(
                 context, request, state, store, input, options
@@ -571,7 +597,7 @@ class LLMTaskExecutor:
                         ).decode("utf-8"),
                         options,
                     )
-                adapter = self.registry.create(state.resolved_provider or "")
+                adapter = self._adapter(state.resolved_provider or "", options)
                 diagnostic = adapter.doctor()
                 if not diagnostic.available:
                     failure = ProviderFailure(
@@ -596,6 +622,7 @@ class LLMTaskExecutor:
                         "provider_unavailable",
                         input_required=False,
                         provider_failure=provider_failure,
+                        details={"next_step": str(diagnostic.details.get("next_step", "Configure a real Host coordinator and run ac-llm doctor --provider host."))} if adapter.name == "host" else None,
                     )
                 continuation_prompt = self._prepared_host_turn_prompt(context, state)
                 if continuation_prompt is not None or (
@@ -706,7 +733,7 @@ class LLMTaskExecutor:
         self, context: Any, request: LLMRequest, state: LLMTaskState, store: Any, adapter: Any, options: LLMExecutionOptions,
         *, continuation_prompt: str | None = None,
     ) -> ProviderExecution:
-        if request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
+        if adapter.name != "host" and request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
             raise InvalidRequestError("The provider does not support the requested reasoning effort.")
         observer = self._observer(context, state, store)
         observer.progress(
@@ -718,6 +745,21 @@ class LLMTaskExecutor:
             },
         )
         workspace = self._prepare_workspace(context, request, state, options=options, continuation_prompt=continuation_prompt)
+        if adapter.name == "host":
+            coordinator = options.host_coordinator
+            if options.task_binding.get("fresh_context_required") and (coordinator is None or not coordinator.fresh_context):
+                raise ProviderFailure(
+                    "This worker requires a coordinator with independent fresh contexts.",
+                    category=FailureCategory.UNAVAILABLE,
+                    details={"code": "host_fresh_context_unavailable"},
+                )
+            handoff = adapter.start(
+                ProviderRequest(self._workspace_prompt(), state.resolved_model or "inherit",
+                                self._provider_output_schema(request, options), self._capability_document(options),
+                                options.limits.idle_timeout_seconds, workspace),
+                observer, context.stop,
+            )
+            return replace(handoff, diagnostics={**dict(handoff.diagnostics), "continuation_prompt": continuation_prompt})
         gate = self._provider_gate(context, options)
         with gate.acquire(
             adapter.name,
@@ -778,7 +820,7 @@ class LLMTaskExecutor:
         prompt: str | None = None,
     ) -> ProviderExecution:
         handle = state.current.native_handle
-        if request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
+        if adapter.name != "host" and request.model.reasoning_effort is not None and request.model.reasoning_effort not in adapter.capabilities().reasoning_efforts:
             raise InvalidRequestError("The provider does not support the requested reasoning effort.")
         if not adapter.capabilities().native_resume:
             return self._call_start(context, request, state, store, adapter, options, continuation_prompt=prompt)
@@ -941,6 +983,8 @@ class LLMTaskExecutor:
         execution: ProviderExecution,
         options: LLMExecutionOptions,
     ) -> LLMTaskOutcome | None:
+        if execution.terminal_kind is ProviderTerminalKind.AWAITING_HOST:
+            return self._handoff(context, request, state, store, options, execution)
         scoped = self._artifacts(context, state.semantic_key)
         raw_doc = self._execution_document_value(execution)
         raw_ref = scoped.publish_json(
@@ -960,6 +1004,92 @@ class LLMTaskExecutor:
             execution,
             options,
         )
+
+    def _handoff(self, context: Any, request: LLMRequest, state: LLMTaskState, store: Any,
+                 options: LLMExecutionOptions, handoff: ProviderExecution) -> LLMTaskOutcome:
+        from .host_tasks import prepare_host_task, execution_from_receipt
+
+        context.checkpoint()
+        state = self._clear_attempt_started(store.read() or state, store)
+        workspace = self._prepare_workspace(
+            context, request, state, options=options,
+            continuation_prompt=handoff.diagnostics.get("continuation_prompt"),
+        )
+        receipt = prepare_host_task(context, request, state, workspace, options,
+                                    provider_prompt=self._workspace_prompt(),
+                                    recovery=self._read_duplicate_recovery(context, state),
+                                    session_history=self._host_session_history(context, request),
+                                    host_history=self._host_turn_history(context, state))
+        if receipt.response is not None:
+            outcome = self._consume_execution(context, request, state, store, execution_from_receipt(receipt), options)
+            return outcome if outcome is not None else self._drive(context, request, store.read() or state, store, options)
+        ref = self._artifacts(context, state.semantic_key).publish_json(
+            f"host-tasks/{receipt.task['task_id']}.json", dict(receipt.task)
+        )
+        context.events.emit("llm_awaiting_host", {"task_id": request.task_id, "host_task_id": receipt.task["task_id"],
+                                                "generation": state.current.generation})
+        return self._pause(
+            store, state, ResumeReason.EXTERNAL_CONDITION, "awaiting_host",
+            input_required=False, request_ref=ref,
+            details={"host_task_id": receipt.task["task_id"], "response_contract": receipt.task["response_contract"],
+                     "host_response_required": True, "next_step": "host-export, host-submit, then resume the owning workflow"},
+        )
+
+    def _host_session_history(self, context: Any, request: LLMRequest) -> list[dict[str, Any]]:
+        import base64
+
+        if request.session is None:
+            return []
+        session = self._session_store(context, request.session.session_key).read()
+        if session is None:
+            raise CorruptTaskStateError("Host session lineage is missing.")
+        history = []
+        if request.session.accepted_prefix_sha256 == hashlib.sha256(b"").hexdigest():
+            return history
+        for turn in session.accepted_turn_records:
+            scoped = context.artifacts.scoped(f"llm/tasks/{turn.task_semantic_key_sha256}")
+            prior_ref = scoped.find("requests/semantic.json")
+            if prior_ref is None:
+                raise CorruptTaskStateError("Accepted host session request is missing.")
+            prior = decode_request(json.loads(scoped.read_bytes(prior_ref).decode("utf-8")))
+            accepted_ref = scoped.find(self._accepted_artifact_id(prior))
+            if accepted_ref is None or accepted_ref.digest.value != turn.artifact_sha256:
+                raise CorruptTaskStateError("Accepted host session result does not match its lineage.")
+            inputs = []
+            for index, item in enumerate(prior.inputs):
+                verified = context.artifacts.read_source(item.source)
+                inputs.append({"input_id": item.input_id, "media_type": verified.media_type,
+                               "sha256": verified.digest.value, "size_bytes": len(verified.content),
+                               "path": f"inputs/{index:04d}-{item.input_id}{self._input_suffix(item.media_type)}",
+                               "content_base64": base64.b64encode(verified.content).decode("ascii")})
+            history.append({"task_id": prior.task_id, "prompt": prior.prompt, "inputs": inputs,
+                            "result": self._decode_artifact_value(scoped.read_bytes(accepted_ref), prior),
+                            "accepted_prefix_sha256": turn.result_prefix_sha256})
+            if turn.result_prefix_sha256 == request.session.accepted_prefix_sha256:
+                return history
+        raise CorruptTaskStateError("Requested host session prefix has no accepted history.")
+
+    def _host_turn_history(self, context: Any, state: LLMTaskState) -> list[dict[str, Any]]:
+        import base64
+
+        scoped = self._artifacts(context, state.semantic_key)
+        history = []
+        for ordinal in range(1, state.host_turn_round + 1):
+            turn = {"round": ordinal}
+            for kind in ("request", "continuation"):
+                ref = scoped.find(self._host_turn_artifact_id(state.current.generation, ordinal, f"{kind}.json"))
+                if ref is not None:
+                    turn[kind] = json.loads(scoped.read_bytes(ref).decode("utf-8"))
+            if "request" in turn:
+                host_request = decode_host_turn(turn["request"]).request
+                if host_request is not None:
+                    completion = self._read_host_broker_completion(context, replace(state, host_turn_round=ordinal), host_request)
+                    if completion is not None:
+                        turn["files"] = [{"path": relative, "sha256": ref.digest.value,
+                                          "content_base64": base64.b64encode(context.artifacts.read_bytes(ref)).decode("ascii")}
+                                         for relative, ref in completion[1]]
+            history.append(turn)
+        return history
 
     def _recover_published_raw(
         self,
@@ -1169,13 +1299,14 @@ class LLMTaskExecutor:
             JsonOutput(FORMATTER_DECISION_SCHEMA, repair="strict"),
             ModelSelection(
                 provider=current.resolved_provider or "",
-                model=current.resolved_model,
+                model=None if current.resolved_provider == "host" and current.resolved_model == "inherit" else current.resolved_model,
                 reasoning_effort=request.model.reasoning_effort,
             ),
         )
         # The formatter is its own durable task and therefore owns its single
         # automatic crash retry independently from the parent generation.
-        formatter_options = options
+        formatter_options = replace(options, task_binding={**dict(options.task_binding), "parent_task_id": request.task_id,
+                                                          "role": "formatter", "fresh_context_required": False})
         formatter_executor = LLMTaskExecutor(
             self.registry,
             automatic_output_retry=False,
@@ -1303,11 +1434,12 @@ class LLMTaskExecutor:
                 if isinstance(outcome, LLMPaused) and not outcome.input_required
                 else ResumeReason.SUPERVISION_REQUIRED
             ),
-            "output_formatting_failed",
+            "awaiting_host" if isinstance(outcome, LLMPaused) and outcome.details.get("code") == "awaiting_host" else "output_formatting_failed",
             input_required=not (
                 isinstance(outcome, LLMPaused) and not outcome.input_required
             ),
             request_ref=record_ref,
+            details=dict(outcome.details) if isinstance(outcome, LLMPaused) else None,
         )
 
     def _publish_formatting_record(
@@ -1906,7 +2038,7 @@ class LLMTaskExecutor:
         continuation_prompt: str,
         options: LLMExecutionOptions,
     ) -> LLMTaskOutcome:
-        if state.current.native_handle is None:
+        if state.current.native_handle is None and state.resolved_provider != "host":
             return LLMFailed(
                 DuplicateHostRequestError(
                     self._read_duplicate_recovery(context, state)["request_id"],
@@ -2274,6 +2406,9 @@ class LLMTaskExecutor:
         options: LLMExecutionOptions,
     ) -> LLMTaskOutcome:
         scoped = self._artifacts(context, state.semantic_key)
+        if host_response.files and scoped.find(self._broker_completion_artifact_id(state)) is None:
+            workspace = self._prepare_workspace(context, request, state, options=options)
+            self._record_host_broker_completion(context, state, host_request, host_response, workspace)
         document = host_continuation_document(host_request.request_id, host_response)
         scoped.publish_json(
             self._host_turn_artifact_id(
@@ -2487,7 +2622,7 @@ class LLMTaskExecutor:
             AcceptedOrigin.PROVIDER,
             current.current.generation,
             current.resolved_provider,
-            current.resolved_model,
+            execution.diagnostics.get("actual_model") if current.resolved_provider == "host" else current.resolved_model,
         )
         # The validated immutable artifact plus the accepted-turn record is
         # the durable acceptance commit. Recording the lineage first prevents
@@ -2505,7 +2640,7 @@ class LLMTaskExecutor:
         return LLMCompleted(
             value,
             next_state.resolved_provider,
-            next_state.resolved_model,
+            accepted.model,
             session,
             execution.usage,
             self._runtime_warnings(options) + self._provider_warnings(execution),
@@ -2772,11 +2907,14 @@ class LLMTaskExecutor:
         options: LLMExecutionOptions,
     ) -> dict[str, Any]:
         capabilities = adapter.capabilities()
+        runtime = self._capability_document(options)
+        if adapter.name == "host":
+            runtime = {key: value for key, value in runtime.items() if key != "ac_environment"}
         return execution_document(
             provider=adapter.name,
             model=model,
             capabilities={
-                "runtime": self._capability_document(options),
+                "runtime": runtime,
                 "structured_output": capabilities.structured_output.value,
                 "config_isolation": capabilities.config_isolation.value,
                 "tool_isolation": capabilities.tool_isolation.value,
@@ -2869,13 +3007,46 @@ class LLMTaskExecutor:
             return f"{PROVIDER_INSTRUCTION_POLICY} {internet}"
         return None
 
-    def _resolve_model(self, request: LLMRequest) -> Any:
+    def _adapter(self, name: str, options: LLMExecutionOptions) -> Any:
+        from .providers.host import HostAdapter
+
+        adapter = self.registry.create(name)
+        if isinstance(adapter, HostAdapter) and options.host_coordinator is not None:
+            return HostAdapter(options.host_coordinator)
+        return adapter
+
+    @staticmethod
+    def _host_options(options: LLMExecutionOptions) -> LLMExecutionOptions:
+        from .host_execution import HostCoordinator
+
+        if options.host_coordinator is None:
+            coordinator = HostCoordinator.from_environment()
+            if coordinator is not None:
+                return replace(options, host_coordinator=coordinator)
+        return options
+
+    def _resolve_model(self, request: LLMRequest, *, options: LLMExecutionOptions | None = None) -> Any:
+        options = self._host_options(LLMExecutionOptions() if options is None else options)
         available = self.registry.names()
+        coordinator = options.host_coordinator
+        selection = request.model
+        if coordinator is not None and "host" in available:
+            preferred = coordinator.default_provider if selection.provider == "auto" else selection.provider
+            if selection.provider == "auto" and preferred not in available:
+                raise InvalidRequestError(f"Coordinator default provider is not registered: {preferred}")
+            if preferred == "host":
+                return resolve_model_selection(replace(selection, provider="host"), available=available)
+            if preferred in available and request.session is None and coordinator.native_fallback:
+                diagnostic = self._adapter(preferred, options).doctor()
+                if not diagnostic.available and diagnostic.prelaunch_unavailable:
+                    return resolve_model_selection(replace(selection, provider="host"), available=available)
+            if selection.provider == "auto" and preferred in available:
+                return resolve_model_selection(replace(selection, provider=preferred), available=available)
         if request.model.provider == "auto":
             healthy: list[str] = []
             for name in available:
                 try:
-                    if self.registry.create(name).doctor().available:
+                    if self._adapter(name, options).doctor().available:
                         healthy.append(name)
                 except Exception:
                     continue

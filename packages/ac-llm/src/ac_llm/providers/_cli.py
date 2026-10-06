@@ -476,6 +476,17 @@ def executable_diagnostic(provider: str, binary: str) -> tuple[bool, str | None]
     return path is not None, path
 
 
+def missing_executable(binary: str) -> bool:
+    """Only confirmed absence permits Host fallback; unusable files do not."""
+    candidates = [Path(binary)] if os.path.dirname(binary) else [
+        Path(directory or ".") / binary for directory in os.environ.get("PATH", os.defpath).split(os.pathsep)
+    ]
+    try:
+        return not any(path.exists() or path.is_symlink() for path in candidates)
+    except OSError:
+        return False
+
+
 def classify_provider_failure_evidence(
     evidence: str,
     *,

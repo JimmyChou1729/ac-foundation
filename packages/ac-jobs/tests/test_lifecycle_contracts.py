@@ -426,7 +426,37 @@ def test_stop_is_idempotent_for_an_already_paused_run(tmp_path):
 
     assert paused.status is RunStatus.PAUSED
     assert view.snapshot == paused
-    assert view.stop_request is None
+    assert view.stop_request is not None
+    assert view.stop_request.target_attempt == paused.attempt
+    assert view.stop_request.reason == "too late"
+    repeated = repository.request_stop("run-1", reason="second reason")
+    assert repeated.snapshot == paused
+    assert repeated.stop_request == view.stop_request
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_stop_pending_to_paused_race_records_attempt_request(tmp_path, monkeypatch, busy):
+    repository = RunRepository(tmp_path)
+    handler = ReplayGroupHandler()
+    spec = RunSpec("stop-race", handler.name, {})
+    repository.create(spec)
+    original = engine_module.FileLease.acquire
+    triggered = False
+
+    def interleaved(lease, *args, **kwargs):
+        nonlocal triggered
+        if lease.path == repository.run_directory("stop-race") / "lease.lock" and not triggered:
+            triggered = True
+            paused = RunEngine(repository).execute(spec, handler)
+            assert paused.status is RunStatus.PAUSED
+            if busy:
+                raise lease_module.RunBusyError("interleaved owner")
+        return original(lease, *args, **kwargs)
+
+    monkeypatch.setattr(engine_module.FileLease, "acquire", interleaved)
+    view = repository.request_stop("stop-race", reason="stop during handoff")
+    assert triggered and view.stop_request is not None
+    assert view.stop_request.target_attempt == view.snapshot.attempt
 
 
 def test_resume_ignores_stop_request_for_previous_attempt(tmp_path):

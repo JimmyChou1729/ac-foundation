@@ -37,12 +37,14 @@ def default_registry() -> ProviderRegistry:
     from .codex import CodexAdapter
     from .dsh import DshAdapter
     from .kimi import KimiAdapter
+    from .host import HostAdapter
 
     registry = ProviderRegistry()
     registry.register("codex", CodexAdapter)
     registry.register("claude", ClaudeAdapter)
     registry.register("kimi", KimiAdapter)
     registry.register("dsh", DshAdapter)
+    registry.register("host", HostAdapter)
     import os
     configured = os.environ.get("AC_LLM_PROVIDER_CONFIG")
     if configured:

@@ -180,9 +180,18 @@ class LLMExecutionOptions:
     runtime_environment: Any = None
     host_broker: Any = None
     profile: LLMExecutionProfile = LLMExecutionProfile.STANDARD
+    host_coordinator: Any = None
+    task_binding: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from .host import AcRuntimeEnvironment, HostAuthority
+        from .host_execution import HostCoordinator
+
+        coordinator = self.host_coordinator
+        if coordinator is not None and not isinstance(coordinator, HostCoordinator):
+            raise InvalidRequestError("host_coordinator must be a HostCoordinator or null.")
+        object.__setattr__(self, "host_coordinator", coordinator)
+        object.__setattr__(self, "task_binding", _frozen_mapping(self.task_binding))
 
         if not isinstance(self.internet, bool):
             raise InvalidRequestError("internet must be a boolean.")

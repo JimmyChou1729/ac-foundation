@@ -27,6 +27,11 @@ returned path are at `data.run.result.artifact_id` and
 `data.run.working_state`. `validate` returns `data.valid` and `data.issues[]`,
 while `stop` returns `data.run.stop_requested` and `data.run.status`.
 
+`stop` also records an attempt-scoped request while a run is paused. This
+prevents late external work from being submitted to that attempt. Repeated
+stops preserve the first request; an explicit owning-workflow resume starts a
+new attempt. Completed and failed runs remain unchanged.
+
 Work groups expose a durable runtime concurrency target. Owners choose the
 initial target through `max_workers`; an operator may inspect or change it
 without stopping the run:

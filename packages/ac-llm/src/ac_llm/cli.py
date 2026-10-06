@@ -26,9 +26,10 @@ from ac_jobs import (
 )
 
 from .api import LLMClient
-from .config import resolve_model_selection
 from .errors import AcLLMError, ErrorCode
 from .host import HostAuthority
+from .host_execution import strict_json
+from .host_tasks import HostTaskService
 from .outcome import LLMCompleted, LLMFailed
 from .providers import ProviderRegistry, default_registry
 from .request import (
@@ -128,10 +129,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument(
         "--provider",
-        choices=("auto", "codex", "claude", "kimi", "dsh"),
+        choices=("auto", "codex", "claude", "kimi", "dsh", "host"),
         default="auto",
         help="provider to diagnose (default: auto)",
     )
+    for name, help_text in (
+        ("host-pending", "list model tasks waiting for the host"),
+        ("host-export", "export complete materials for one host task"),
+        ("host-submit", "validate and durably submit a host response"),
+    ):
+        command = commands.add_parser(name, help=help_text, description=help_text.capitalize() + ".")
+        command.add_argument("--run-root", required=True, type=Path)
+        command.add_argument("--run-id", required=True)
+        if name == "host-export":
+            command.add_argument("--task-id", required=True)
+            command.add_argument("--output-directory", type=Path, help="materialize verified inputs and a response template")
+        elif name == "host-submit":
+            command.add_argument("--response", required=True, type=Path)
+        else:
+            command.add_argument("--all", action="store_true", help="include consumed and completed tasks")
     return parser
 
 
@@ -194,6 +210,17 @@ def _dispatch(
     registry: ProviderRegistry,
     event_sink: EventSink | None,
 ) -> CommandResult:
+    if args.command.startswith("host-"):
+        service = HostTaskService()
+        location = {"run_root": args.run_root, "run_id": args.run_id}
+        if args.command == "host-pending":
+            data = {"tasks": service.pending(**location, include_completed=args.all)}
+        elif args.command == "host-export":
+            data = ({"task": service.export(**location, task_id=args.task_id)} if args.output_directory is None
+                    else service.materialize(**location, task_id=args.task_id, directory=args.output_directory))
+        else:
+            data = service.submit(**location, response=strict_json(args.response.read_bytes()))
+        return CommandResult(CommandStatus.COMPLETED, data=data)
     if args.command == "generate":
         request = decode_request(_read_object(args.request))
         options = _execution_options(args)
@@ -261,17 +288,21 @@ def _dispatch(
                 ).data["run"]
             },
         )
-    selection = resolve_model_selection(
-        ModelSelection(provider=args.provider),
-        available=registry.names(),
-    )
-    diagnostic = registry.create(selection.provider).doctor()
+    from .executor import LLMTaskExecutor
+    from .request import LLMRequest, TextOutput
+
+    executor = LLMTaskExecutor(registry)
+    options = LLMExecutionOptions()
+    selection = executor._resolve_model(LLMRequest("doctor", "Diagnose provider availability.", TextOutput(),
+                                                   ModelSelection(provider=args.provider)), options=options)
+    diagnostic = executor._adapter(selection.provider, options).doctor()
     return CommandResult(
         CommandStatus.COMPLETED,
         data={
             "provider": diagnostic.provider,
             "available": diagnostic.available,
             "executable": diagnostic.executable,
+            "prelaunch_unavailable": diagnostic.prelaunch_unavailable,
             "details": dict(diagnostic.details),
         },
     )
@@ -344,7 +375,7 @@ def _help_command(arguments: list[str]) -> str:
     command = (
         arguments[0]
         if arguments
-        and arguments[0] in {"generate", "resume", "status", "stop", "doctor"}
+        and arguments[0] in {"generate", "resume", "status", "stop", "doctor", "host-pending", "host-export", "host-submit"}
         else None
     )
     return " ".join(

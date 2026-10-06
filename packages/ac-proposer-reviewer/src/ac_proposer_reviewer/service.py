@@ -30,6 +30,7 @@ from ac_llm import (
     LLMRequest,
     LLMStopped,
     LLMTaskService,
+    HostCoordinator,
     SessionRef,
     decode_resume_input,
 )
@@ -949,12 +950,20 @@ class ProposerReviewerService:
         )
         status = "failed"
         try:
+            coordinator = options.llm.host_coordinator or HostCoordinator.from_environment()
+            worker_options = options
+            if coordinator is not None or request.model.provider == "host":
+                worker_options = replace(options, llm=replace(options.llm, host_coordinator=coordinator, task_binding={
+                    **dict(options.llm.task_binding), "loop_id": loop_id, "round": round_number,
+                    "role": role, "worker_id": worker_id, "execution_scope": execution_scope,
+                    "fresh_context_required": True,
+                }))
             outcome = self._call_worker(
                 context,
                 request,
                 task_id=task_id,
                 pause=pause,
-                options=options,
+                options=worker_options,
             )
             status = _worker_outcome_status(outcome)
             return outcome

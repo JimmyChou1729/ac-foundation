@@ -12,6 +12,7 @@ from ..output import CandidateMaterial
 from ._cli import (
     classify_provider_failure_evidence,
     executable_diagnostic,
+    missing_executable,
     run_cli,
 )
 from .base import (
@@ -57,7 +58,8 @@ class ClaudeAdapter:
 
     def doctor(self) -> ProviderDiagnostic:
         available, path = executable_diagnostic(self.name, self.binary)
-        return ProviderDiagnostic(self.name, available, path)
+        return ProviderDiagnostic(self.name, available, path,
+                                  prelaunch_unavailable=not available and missing_executable(self.binary))
 
     def start(self, request: ProviderRequest, observer: Any, stop: Any) -> ProviderExecution:
         prompt = request.prompt

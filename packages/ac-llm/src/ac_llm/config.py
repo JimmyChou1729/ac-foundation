@@ -9,7 +9,7 @@ from typing import Mapping, Sequence
 from .errors import InvalidRequestError
 from .request import ModelSelection
 
-PROVIDERS = ("codex", "claude", "kimi", "dsh")
+PROVIDERS = ("codex", "claude", "kimi", "dsh", "host")
 
 DEFAULT_MODELS: Mapping[str, Mapping[str, str]] = {
     "codex": {
@@ -36,6 +36,7 @@ DEFAULT_MODELS: Mapping[str, Mapping[str, str]] = {
         "high": "deepseek-v4-flash",
         "xhigh": "deepseek-v4-flash",
     },
+    "host": {tier: "inherit" for tier in ("low", "medium", "high", "xhigh")},
 }
 
 

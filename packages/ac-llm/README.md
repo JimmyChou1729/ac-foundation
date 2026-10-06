@@ -5,6 +5,10 @@ provider and model resolution, structured-output validation, sessions, and
 durable recovery over `ac-jobs`. Research-specific prompts and orchestration
 belong to the packages that call it.
 
+The formal `host` provider supports durable, non-blocking execution by a calling
+agent. See [Host execution](HOST_EXECUTION.md) for coordinator declarations,
+conservative pre-launch fallback, export/submit/resume, and honest model metadata.
+
 `codex_model_catalog()` performs a bounded, read-only Codex app-server
 `model/list` request. It returns only visible model IDs, presentation metadata,
 model-specific reasoning efforts, and the provider default. Invalid output,
