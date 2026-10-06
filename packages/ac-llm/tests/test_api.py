@@ -559,9 +559,7 @@ def test_content_rich_invalid_output_uses_formatter_without_worker_replacement(
                     {
                         "action": "format",
                         "reason": "required content is present",
-                        "formatted_output": {
-                            "answer": "the complete answer is present"
-                        },
+                        "formatted_output": '{"answer":"the complete answer is present"}',
                     },
                     handle="formatter",
                 ),
@@ -618,7 +616,7 @@ def test_formatter_insufficient_gets_one_full_regeneration(
                 {
                     "action": "insufficient",
                     "reason": "required answer is absent",
-                    "formatted_output": None,
+                    "formatted_output": "",
                 },
                 handle="formatter",
             ),
@@ -651,7 +649,7 @@ def test_invalid_formatter_result_gets_one_full_regeneration(
                 {
                     "action": "format",
                     "reason": "bad formatting",
-                    "formatted_output": {"wrong": "shape"},
+                    "formatted_output": '{"wrong":"shape"}',
                 },
                 handle="formatter",
             ),
@@ -757,7 +755,7 @@ def test_formatter_external_pause_resumes_without_replaying_worker(
             {
                 "action": "format",
                 "reason": "required content is present",
-                "formatted_output": {"answer": "the complete answer is present"},
+                "formatted_output": '{"answer":"the complete answer is present"}',
             },
             handle="formatter",
         )
@@ -782,7 +780,7 @@ def test_formatter_completion_replays_after_outer_acceptance_crash(
                 {
                     "action": "format",
                     "reason": "required content is present",
-                    "formatted_output": {"answer": "the complete answer is present"},
+                    "formatted_output": '{"answer":"the complete answer is present"}',
                 },
                 handle="formatter",
             ),
