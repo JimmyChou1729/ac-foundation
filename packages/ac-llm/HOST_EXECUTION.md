@@ -109,3 +109,8 @@ Cowork, Kimi, and dot tool availability and model controls require separate
 host smoke tests. Copying a durable directory is tested; automatic transfer
 between machines, host account access, and platform installation are separate
 integration concerns. No external paid model API is required by this provider.
+
+Workflow adapters can use `LLMClient.run_id_for(request)` before calling
+`generate` to inspect a previous run without starting an attempt. An adapter
+that automatically retries should preserve an existing stop request or a pause
+requiring supervisory input; only an explicit resume clears that stop boundary.

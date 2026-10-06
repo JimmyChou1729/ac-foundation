@@ -75,6 +75,14 @@ def _completed(value: object, *, handle: str = "thread-1") -> ProviderExecution:
     )
 
 
+def test_run_id_can_be_inspected_before_starting(tmp_path):
+    request = LLMRequest("inspect-before-start", "fixture", JsonOutput({"type": "object"}))
+    client = LLMClient()
+    run_id = client.run_id_for(request)
+    assert run_id == api_module.derive_run_id(api_module.HANDLER_NAME, request.task_id)
+    assert not RunRepository(tmp_path).run_directory(run_id).exists()
+
+
 def test_auto_selection_skips_unavailable_provider_before_binding(
     adapter,
     registry,
