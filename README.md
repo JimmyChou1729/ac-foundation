@@ -57,6 +57,55 @@ is preserved. Source-owned packages cannot be overridden. Use the same option
 for subsequent commands. Without it, the existing base fingerprint is unchanged.
 
 
+### Interrupted runtime installation
+
+Bootstrap layout v2 uses POSIX `flock` on a permanent lock inode. Kernel
+ownership is authoritative; hostnames, PIDs, namespace-visible process lists,
+and elapsed time are not takeover criteria. Installer subprocesses inherit the
+lock descriptor. Closing the coordinator does not unlock a surviving child;
+`setup --retry` waits and reports `lock_occupied`/`lock_wait_timeout` rather than
+starting a competing writer. Lock acquisition errors report
+`lock_ownership_unverifiable` and stop. The lock file must not be removed.
+
+Each installation uses a separate retained `attempts/<id>/venv`. Only a
+completed attempt is published through the stable `venv` link and an exact
+matching success marker. This also isolates a surviving grandchild that closes
+inherited descriptors. Absolute console-script shebangs continue to point at
+the original attempt directory. Incomplete environments cannot satisfy doctor
+readiness. Logs stream into each attempt as commands run; failed/interrupted
+attempts and their state remain available after retry. A ready v2 runtime has a
+read-only fast path and repeated setup does not reinstall it.
+
+Layout v2 deliberately does not reuse or mutate v1 runtimes, whose directory
+locks cannot safely cooperate with the new protocol. Updating the generated
+bootstrap selects a separate v2 runtime automatically, preserving old evidence
+without manual lock deletion. This is an internal layout version, not a package
+release. Current installation support requires Linux/macOS and a filesystem
+that reliably implements shared advisory `flock`; Windows and remote filesystem
+locking semantics are not certified. Different PID namespaces do not supply
+process-liveness evidence. Tests cover shared local inodes with simulated
+foreign namespace owner records; deployment-specific mount semantics still need
+verification. See [flock semantics](https://man7.org/linux/man-pages/man2/flock.2.html).
+
+The installer preserves explicit `UV_CACHE_DIR` and `PIP_CACHE_DIR`. Otherwise
+it selects private `cache/uv` and `cache/pip` paths under that runtime. Temporary
+storage uses the first configured `TMPDIR`, `TEMP`, or `TMP`, otherwise private
+`tmp`; all installer subprocess temp variables use that selected directory.
+The selected launcher Python is passed to uv and automatic Python downloads are
+disabled. `HOME`, system directory permissions and shell profiles are unchanged.
+Doctor reports these paths with read-only access estimates and probes an
+existing lock without creating it. Setup performs actual write probes and
+reports the exact failing path/OS error; unrelated dependency/network errors
+retain their original classification and logs.
+
+After an external platform approval cancellation, retain the platform message
+separately. The bootstrap cannot infer user intent or repair that platform's
+approval system. Run doctor to inspect lock availability and the last attempt;
+then use the original `setup --retry` entry point. An occupied lock means wait
+for or inspect the existing installer. Do not delete its lock, blindly loop
+retries, or escalate permissions to bypass a platform decision.
+
+
 ## License
 
 MIT. See `LICENSE`.

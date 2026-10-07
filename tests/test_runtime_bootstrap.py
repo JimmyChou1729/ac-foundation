@@ -132,17 +132,11 @@ def test_source_lock_rejects_repository_userinfo(tmp_path: Path) -> None:
 def test_logged_command_failure_does_not_expose_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class Failed:
-        returncode = 1
-        stdout = ""
-        stderr = "https://token@example.com/repository.git failed"
-
-    monkeypatch.setattr(RUNTIME.subprocess, "run", lambda *args, **kwargs: Failed())
     log = tmp_path / "install.log"
 
     with pytest.raises(RuntimeError, match="exit status 1") as raised:
         RUNTIME._run_logged(
-            ["git", "https://token@example.com/repository.git"], log
+            [sys.executable, "-c", "import sys; print('https://token@example.com/repository.git failed'); sys.exit(1)"], log
         )
 
     assert "token" not in str(raised.value)
@@ -161,7 +155,7 @@ def test_install_creates_console_scripts_at_their_final_venv_path(
     constraints = tmp_path / "missing-constraints.txt"
     commands = []
 
-    def fake_run(command: list[str], _log_path: Path) -> None:
+    def fake_run(command: list[str], _log_path: Path, **kwargs) -> None:
         commands.append(command)
         if command[1:3] == ["-m", "venv"]:
             venv = Path(command[-1])
@@ -188,7 +182,7 @@ def test_install_creates_console_scripts_at_their_final_venv_path(
 
     tool = runtime_dir / "venv/bin/ac-jobs"
     assert tool.read_text(encoding="utf-8") == (
-        f"#!{runtime_dir / 'venv/bin/python'}\n"
+        f"#!{(runtime_dir / 'venv').readlink() / 'bin/python'}\n"
     )
     assert "numpy==2.3.5" in commands[-1]
 
