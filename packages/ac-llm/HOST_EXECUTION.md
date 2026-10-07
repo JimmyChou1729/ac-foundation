@@ -69,6 +69,19 @@ The same normalized response is idempotent, including after completion;
 conflicting responses are rejected. Submit persists a receipt before resume
 consumes it through the original CandidateMaterial and acceptance path.
 
+For a task whose binding requires a fresh context, the exported response schema
+requires `actor.kind=subagent` (or `fake` for offline fixtures), a nonblank
+`actor.context_id`, and `isolation=fresh_context`. The template selects the
+expected actor kind, but leaves identity and isolation unconfirmed: fill these
+from the actual worker execution, not from the template alone. Submission still
+checks those requirements and reports which field is wrong.
+
+Export constraints are derived from the immutable task binding. Existing
+pending receipts and task IDs are not rewritten, and their valid responses
+remain resumable after an upgrade. To obtain updated instructions for an
+already-materialized task, export to a new empty directory; existing exported
+files and worker results are never silently overwritten.
+
 Independent proposer/reviewer workers require separate context IDs. A worker
 may continue its own context across host turns and rounds. Different workers
 in the same loop/scope cannot share a context ID, including concurrent submits.

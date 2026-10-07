@@ -396,3 +396,73 @@ def test_early_broker_files_survive_later_workspace_overwrite(tmp_path):
     service.materialize(run_root=tmp_path, run_id="host-run", task_id=task["task_id"], directory=folder)
     assert (folder / "history/host/1/work/result.txt").read_bytes() == b"first"
     assert (folder / "work/result.txt").read_bytes() == b"second"
+
+
+@pytest.mark.parametrize("field,bad_value,diagnostic", [
+    ("kind", "agent", "actor.kind"),
+    ("context_id", None, "actor.context_id"),
+    ("context_id", "   ", "actor.context_id"),
+    ("isolation", "unknown", "isolation"),
+])
+def test_fresh_export_schema_matches_submit_constraints(tmp_path, field, bad_value, diagnostic):
+    from jsonschema import Draft202012Validator
+    opts = options(task_binding={"fresh_context_required": True})
+    _, service, task, _ = pending(tmp_path, opts=opts)
+    value = response(task, isolation="fresh_context")
+    if field == "isolation":
+        value[field] = bad_value
+    else:
+        value["actor"][field] = bad_value
+    assert not Draft202012Validator(task["response_schema"]).is_valid(value)
+    with pytest.raises(InvalidRequestError, match=diagnostic):
+        service.submit(run_root=tmp_path, run_id="host-run", response=value)
+
+
+def test_fresh_template_requires_truthful_completion_and_preserves_pending_receipt(tmp_path):
+    from jsonschema import Draft202012Validator
+    opts = options(task_binding={"fresh_context_required": True})
+    client, service, task, _ = pending(tmp_path, opts=opts)
+    # Includes a receipt created with the original generic stored response schema.
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    assert service.export(run_root=tmp_path, run_id="host-run", task_id=task["task_id"]) == task
+    assert all(p.read_bytes() == value for p, value in before.items())
+    # Pre-upgrade materialized files are kept intact; callers get a safe next step.
+    import copy
+    legacy = copy.deepcopy(task)
+    actor_schema = legacy["response_schema"]["properties"]["actor"]
+    actor_schema["properties"]["kind"] = {"enum": ["agent", "subagent", "fake"]}
+    actor_schema["properties"]["context_id"] = {"type": ["string", "null"]}
+    actor_schema["required"] = ["actor_id", "kind"]
+    legacy["response_schema"]["properties"]["isolation"] = {"enum": ["fresh_context", "inherited", "unknown"]}
+    legacy["response_schema"]["required"].remove("isolation")
+    old_directory = tmp_path / "old-export"
+    old_directory.mkdir()
+    old_task = json.dumps(legacy)
+    (old_directory / "task.json").write_text(old_task)
+    (old_directory / "response.json").write_text("worker result to preserve")
+    with pytest.raises(IdempotencyConflictError, match="new empty export directory"):
+        service.materialize(run_root=tmp_path, run_id="host-run", task_id=task["task_id"], directory=old_directory)
+    assert (old_directory / "task.json").read_text() == old_task
+    assert (old_directory / "response.json").read_text() == "worker result to preserve"
+    directory = tmp_path / "export"
+    service.materialize(run_root=tmp_path, run_id="host-run", task_id=task["task_id"], directory=directory)
+    template = json.loads((directory / "response.template.json").read_text())
+    assert template["actor"] == {"actor_id": "", "kind": "subagent", "context_id": None}
+    assert template["isolation"] == "unknown"  # Never pre-attest an execution.
+    assert not Draft202012Validator(task["response_schema"]).is_valid(template)
+    service.materialize(run_root=tmp_path, run_id="host-run", task_id=task["task_id"], directory=directory)
+    assert isinstance(client.resume(run_root=tmp_path, run_id="host-run", options=opts).outcome, LLMPaused)
+    value = response(task, isolation="fresh_context")
+    assert Draft202012Validator(task["response_schema"]).is_valid(value)
+    service.submit(run_root=tmp_path, run_id="host-run", response=value)
+    assert isinstance(client.resume(run_root=tmp_path, run_id="host-run", options=opts).outcome, LLMCompleted)
+    assert service.submit(run_root=tmp_path, run_id="host-run", response=value)["reused"]
+
+
+def test_nonindependent_agent_export_remains_supported(tmp_path):
+    from jsonschema import Draft202012Validator
+    _, service, task, _ = pending(tmp_path)
+    value = response(task)
+    value["actor"] = {"actor_id": "coordinator", "kind": "agent"}
+    assert Draft202012Validator(task["response_schema"]).is_valid(value)
+    assert not service.submit(run_root=tmp_path, run_id="host-run", response=value)["reused"]

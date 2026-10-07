@@ -131,11 +131,13 @@ def _response(task: Mapping[str, Any], value: Any) -> dict[str, Any]:
     if isolation not in {"fresh_context", "inherited", "unknown"}:
         raise InvalidRequestError("Invalid host isolation declaration.")
     binding = task["request"]["binding"]
-    if binding.get("fresh_context_required") and (
-        isolation != "fresh_context" or actor.get("kind") not in {"subagent", "fake"}
-        or not actor.get("context_id")
-    ):
-        raise InvalidRequestError("This worker requires a separate fresh context and context_id.")
+    if binding.get("fresh_context_required"):
+        if actor["kind"] not in {"subagent", "fake"}:
+            raise InvalidRequestError("actor.kind must be subagent for this independent worker (fake is for offline fixtures).")
+        if isolation != "fresh_context":
+            raise InvalidRequestError("isolation must be fresh_context for this independent worker; attest only an actually separate context.")
+        if not actor.get("context_id"):
+            raise InvalidRequestError("actor.context_id must identify this independent worker's actual context.")
     for name in ("actual_model", "reasoning_effort"):
         if value.get(name) is not None and (not isinstance(value[name], str) or not value[name].strip()):
             raise InvalidRequestError(f"{name} must be non-empty or null.")
@@ -273,7 +275,19 @@ class HostTaskService:
         receipt = _store(context, task_id).read()
         if receipt is None:
             raise InvalidRequestError("Unknown host task_id in the current recovery epoch.")
-        return copy.deepcopy(dict(receipt.task))
+        task = copy.deepcopy(dict(receipt.task))
+        # Presentation constraints can improve without rewriting durable receipts
+        # or changing the identity of an already-paused task.
+        if task["request"]["binding"].get("fresh_context_required"):
+            schema = task["response_schema"]
+            actor = schema["properties"]["actor"]
+            actor["properties"]["kind"] = {"enum": ["subagent", "fake"]}
+            actor["properties"]["context_id"] = {"type": "string", "pattern": r"\S"}
+            actor["required"] = ["actor_id", "kind", "context_id"]
+            schema["properties"]["isolation"] = {"const": "fresh_context"}
+            if "isolation" not in schema["required"]:
+                schema["required"].append("isolation")
+        return task
 
     def materialize(self, *, run_root: str | Path, run_id: str, task_id: str,
                     directory: str | Path) -> dict[str, Any]:
@@ -324,14 +338,16 @@ class HostTaskService:
                    "session_history": material["session_history"], "host_history": material["host_history"]}
         add("host/control.json", canonical_json_bytes(control))
         add("task.json", canonical_json_bytes(task))
+        fresh = bool(material["binding"].get("fresh_context_required"))
         add("response.template.json", canonical_json_bytes({"schema_version": RESPONSE_PROTOCOL, "task_id": task_id,
-            "request_sha256": task["request_sha256"], "actor": {"actor_id": "host", "kind": "agent", "context_id": None},
+            "request_sha256": task["request_sha256"],
+            "actor": {"actor_id": "" if fresh else "host", "kind": "subagent" if fresh else "agent", "context_id": None},
             "output": None, "actual_model": None, "reasoning_effort": None, "isolation": "unknown", "usage": None}))
         root.mkdir(parents=True, exist_ok=True)
         for relative, content in files.items():
             destination = root / relative
             if destination.exists() and destination.read_bytes() != content:
-                raise IdempotencyConflictError(f"Export would overwrite different content: {relative}")
+                raise IdempotencyConflictError(f"Export would overwrite different content: {relative}; use a new empty export directory and preserve existing worker responses.")
         for relative, content in files.items():
             atomic_write_bytes(root / relative, content)
         work.mkdir(exist_ok=True)
