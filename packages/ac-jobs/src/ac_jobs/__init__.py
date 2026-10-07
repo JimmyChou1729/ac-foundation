@@ -28,6 +28,7 @@ from .errors import (
 )
 from .stopping import StopToken
 from .events import EventSink, EventWriter
+from .installation import InstallationOperation, InstallationCommandError, InstallationOwnershipError, InstallationRetryRequiredError
 from .lease import FileLease, file_lease
 from .lease_pool import BoundedLease, BoundedLeasePool
 from .identity import (
@@ -127,6 +128,10 @@ __all__ = [
     "GroupWorkerControl",
     "IdempotencyConflictError",
     "ImmutableArtifactStore",
+    "InstallationOperation",
+    "InstallationCommandError",
+    "InstallationOwnershipError",
+    "InstallationRetryRequiredError",
     "InvalidRunIdError",
     "InvalidStateError",
     "InvalidTransitionError",

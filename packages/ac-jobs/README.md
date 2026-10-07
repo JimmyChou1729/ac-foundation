@@ -101,6 +101,57 @@ the durable run and recorded best-effort as `progress_sink_failed` events.
 Progress event data may contain any valid JSON body; individual durable events
 remain limited to 256 KiB.
 
+## Explicit installation operations
+
+`InstallationOperation` is a separate, POSIX-only lifecycle for caller-owned
+environment installation. It does not alter research-run stopping or provider
+selection. The caller chooses a stable operation directory from the payload
+destination and supplies its immutable source identity:
+
+```python
+from ac_jobs import InstallationOperation
+
+operation = InstallationOperation("local/.tools.ac-install", {
+    "destination": "local/tools", "source_sha256": "<locked-source-digest>"
+})
+print(operation.status())  # Read-only; does not even create the directory.
+with operation.begin(retry=False):
+    operation.checkpoint("installing")
+    execution = operation.run(["<installer>", "<arguments>"], timeout=600)
+    # Validate and atomically publish a fresh attempt-owned payload here.
+    operation.complete({"payload_checked": True})
+```
+
+`begin` acquires a permanent kernel `flock` lease without waiting. An occupied
+lease raises `RunBusyError`; unsupported/unverifiable ownership raises
+`InstallationOwnershipError`. A source mismatch or corrupt record fails
+closed. A prior incomplete attempt requires an explicit `begin(retry=True)`
+and raises `InstallationRetryRequiredError` otherwise. Neither PID existence,
+hostname nor elapsed time authorizes takeover. Never unlink the lease file or
+use source-specific operation directories to bypass an occupied destination.
+Shared filesystems must provide coherent `flock` semantics; this API does not
+certify a mount's locking behavior.
+
+Each attempt retains phase events, state and command stdout/stderr logs.
+A supervisor and its command inherit the lease. Closing the coordinator's
+descriptor does not unlock surviving children. Commands remain under the
+same process-group/platform authority; this is not a detached service or an
+approval bypass. Killing only the coordinator can leave a queryable supervisor;
+killing the whole process group/container can leave only the last durable
+phase. `status` reports `running` whenever the lease is held, even if a terminal
+record exists. A running record with a free lease becomes `interrupted`.
+Process IDs are diagnostic only; a cancellation's intent is not inferred.
+
+A successful command requires an exit-zero terminal receipt and complete
+logs. Failures, timeouts, incomplete streams or missing receipts raise
+`InstallationCommandError` with the saved record. Commands and environment
+values are not persisted; URL userinfo in command output is redacted. Callers
+must still avoid printing credentials. Full logs are retained; returned output
+is limited to 8 MiB per stream. Only the caller can validate payloads and call
+`complete`; command success alone is not installation success. Caller recovery
+should preserve uncertain trees and build a new attempt from verified inputs,
+then reconcile a valid published payload if publication preceded a crash.
+
 ## Tests
 
 From the repository root:
