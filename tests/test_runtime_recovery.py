@@ -46,6 +46,9 @@ if os.environ.get('HOLD_INSTALL')=='1':
     (control/'child.json').write_text(json.dumps({'pid':os.getpid(),'venv':str(root)}))
     print('installer waiting',flush=True)
     while not (control/'release').exists():time.sleep(.02)
+if os.environ.get('FAIL_DNS')=='1':
+    print('fatal: unable to access https://token@github.com/example/repo.git: Could not resolve host: github.com',flush=True)
+    sys.exit(1)
 (root/'bin/ac-jobs').write_text('#!'+str(root/'bin/python')+'\nprint('+repr(os.environ.get('GENERATION','first'))+')\n')
 (root/'bin/ac-jobs').chmod(0o755)
 (root/'finished').touch()
@@ -147,6 +150,24 @@ def test_explicit_unusable_path_preserves_failure_and_retry_evidence(public_runt
     assert run(public_runtime, "setup", "--retry").returncode == 0
     assert Path(failure['attempt']).is_dir() and Path(failure['log']).read_text()
     assert blocked.read_text() == "keep"
+
+
+def test_dns_failure_is_visible_and_recovery_remains_explicit(public_runtime):
+    _, _, runtime, root = public_runtime
+    first = run(public_runtime, "setup", extra={"FAIL_DNS": "1"})
+    assert first.returncode == 1 and "Could not resolve host: github.com" in first.stderr
+    assert "token@" not in first.stderr
+    failure = json.loads((runtime / "install.failed").read_text())
+    assert failure["log"] in first.stderr
+    calls = (root / "calls.jsonl").read_bytes()
+    blocked = run(public_runtime, "run", "ac-jobs")
+    assert blocked.returncode == 1 and "Could not resolve host: github.com" in blocked.stderr
+    assert failure["log"] in blocked.stderr and "setup --retry" in blocked.stderr
+    assert "token@" not in blocked.stderr
+    assert (root / "calls.jsonl").read_bytes() == calls
+    assert run(public_runtime, "setup", "--retry").returncode == 0
+    assert Path(failure["log"]).is_file()
+    assert run(public_runtime, "run", "ac-jobs").stdout.strip() == "first"
 
 
 def test_doctor_handles_empty_configuration_without_writes(public_runtime):

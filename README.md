@@ -76,6 +76,13 @@ readiness. Logs stream into each attempt as commands run; failed/interrupted
 attempts and their state remain available after retry. A ready v2 runtime has a
 read-only fast path and repeated setup does not reinstall it.
 
+An installer command failure reports its last eight non-empty output lines
+(at most 500 characters each), with URL userinfo redacted, plus the full log
+path. Ordinary calls after failure repeat the saved cause without reinstalling.
+After correcting that cause, explicitly use `setup --retry`; this can be
+coordinated by an Agent within its existing authority, without an automatic
+retry loop or bypassing a host permission decision.
+
 Layout v2 deliberately does not reuse or mutate v1 runtimes, whose directory
 locks cannot safely cooperate with the new protocol. Updating the generated
 bootstrap selects a separate v2 runtime automatically, preserving old evidence

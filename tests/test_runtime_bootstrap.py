@@ -141,6 +141,19 @@ def test_logged_command_failure_does_not_expose_command(
 
     assert "token" not in str(raised.value)
     assert "token" not in log.read_text(encoding="utf-8")
+    assert "[REDACTED]@example.com" in str(raised.value)
+    assert str(log) in str(raised.value)
+
+
+def test_logged_failure_returns_bounded_output_tail_and_keeps_full_log(tmp_path):
+    log = tmp_path / "install.log"
+    program = "import sys; [print('progress-' + str(i) + 'x' * 700) for i in range(20)]; print('fatal: Could not resolve host: github.com', file=sys.stderr); sys.exit(1)"
+    with pytest.raises(RuntimeError) as raised:
+        RUNTIME._run_logged([sys.executable, "-u", "-c", program], log)
+    message = str(raised.value)
+    assert "Could not resolve host: github.com" in message
+    assert "progress-0" not in message and len(message) < 4300
+    assert "progress-0" in log.read_text() and 'x' * 700 in log.read_text()
 
 
 def test_install_creates_console_scripts_at_their_final_venv_path(
