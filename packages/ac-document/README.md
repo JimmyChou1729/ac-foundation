@@ -7,6 +7,11 @@ structure, and terminology workflows. It contains no paper-provider behavior.
 `AcDocumentService` accepts local files and repository artifacts. Academic
 identifiers and providers belong to a consumer package, not `ac-document`.
 
+The default distribution includes HTTPX 0.28.1+ and SOCKS support. HTTPX callers
+that inherit `socks5h` proxy settings can initialize without a separate optional
+package installation. Operation-specific network policies still apply; this
+does not change existing callers that explicitly disable environment proxies.
+
 HTML MathML TeX projections are normalized before entering a `RichDocument`.
 LaTeXML-only line-breaking hints, redundant default-black color commands, and
 empty `array` option lists are removed while semantic TeX is preserved.
