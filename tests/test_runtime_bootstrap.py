@@ -50,6 +50,25 @@ def test_source_lock_requires_full_sha(tmp_path: Path) -> None:
         RUNTIME.load_lock(path)
 
 
+def test_optional_requirements_have_separate_identity_and_cannot_override_sources(tmp_path):
+    path = tmp_path / "runtime-sources.json"
+    path.write_text(json.dumps(_lock()))
+    lock = RUNTIME.load_lock(path)
+    requirement_path = tmp_path / "optional.txt"
+    requirement_path.write_text("scipy==1.17.0\nnumpy==2.3.5\n")
+    extra = RUNTIME.load_extra_requirements(requirement_path, lock)
+    base, identity = RUNTIME._fingerprint(path, lock, "git", None, tmp_path / "constraints")
+    scientific, selected = RUNTIME._fingerprint(path, lock, "git", None, tmp_path / "constraints", extra)
+    assert base != scientific and "extra_requirements" not in identity
+    assert selected["extra_requirements"] == ["numpy==2.3.5", "scipy==1.17.0"]
+    requirement_path.write_text("Ac_Jobs==2.0.0\n")
+    with pytest.raises(RUNTIME.RuntimeConfigError, match="overrides"):
+        RUNTIME.load_extra_requirements(requirement_path, lock)
+    requirement_path.write_text("--index-url=https://example.invalid\n")
+    with pytest.raises(RUNTIME.RuntimeConfigError, match="plain exact"):
+        RUNTIME.load_extra_requirements(requirement_path, lock)
+
+
 def test_source_lock_rejects_duplicate_package_ownership(tmp_path: Path) -> None:
     document = _lock()
     document["sources"].append(
@@ -140,8 +159,10 @@ def test_install_creates_console_scripts_at_their_final_venv_path(
     runtime_dir.mkdir()
     foundation = tmp_path / "foundation"
     constraints = tmp_path / "missing-constraints.txt"
+    commands = []
 
     def fake_run(command: list[str], _log_path: Path) -> None:
+        commands.append(command)
         if command[1:3] == ["-m", "venv"]:
             venv = Path(command[-1])
             (venv / "bin").mkdir(parents=True)
@@ -162,13 +183,14 @@ def test_install_creates_console_scripts_at_their_final_venv_path(
         {"foundation": foundation},
         constraints,
         "f" * 64,
-        {"mode": "local"},
+        {"mode": "local", "extra_requirements": ["numpy==2.3.5"]},
     )
 
     tool = runtime_dir / "venv/bin/ac-jobs"
     assert tool.read_text(encoding="utf-8") == (
         f"#!{runtime_dir / 'venv/bin/python'}\n"
     )
+    assert "numpy==2.3.5" in commands[-1]
 
 
 def test_python_script_command_uses_private_runtime(

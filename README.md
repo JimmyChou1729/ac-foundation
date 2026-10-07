@@ -49,6 +49,13 @@ Existing `auto` (local only with all valid roots), `local` (all roots required),
 and `git` modes are unchanged. Product-generated copies must be synchronized
 with this canonical file and their generated-source checksum manifests.
 
+An explicit `--requirements <file>` before `setup`, `doctor`, `run` or `script`
+selects an optional environment. The file contains plain exact external pins
+such as `numpy==2.3.5`. Its normalized requirements enter the runtime fingerprint
+and installation alongside the locked source packages; the base environment
+is preserved. Source-owned packages cannot be overridden. Use the same option
+for subsequent commands. Without it, the existing base fingerprint is unchanged.
+
 
 ## License
 

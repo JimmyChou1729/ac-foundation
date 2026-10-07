@@ -58,7 +58,7 @@ def environment_diagnostics(
                      "guidance": "Use an existing writable project directory."}
     return {
         "schema_version": "ac.llm.environment_doctor.v1",
-        "python": {"version": sys.version.split()[0], "supported": sys.version_info >= (3, 11)},
+        "python": {"version": sys.version.split()[0], "executable": sys.executable, "supported": sys.version_info >= (3, 11)},
         "source_acquisition": {"git_available": shutil.which("git") is not None, "local_roots": roots,
                                "guidance": "Product local installs require both source roots; use runtime doctor for the selected lock and readiness."},
         "network": {"status": "not_checked", "authentication": "not_checked"},
