@@ -231,7 +231,7 @@ class LLMTaskExecutor:
             except AcLLMError as exc:
                 return LLMFailed(exc)
             if state.pause is not None:
-                return self._paused_outcome(state.pause)
+                return self._paused_outcome(state.pause, context=context)
             if state.pending_host_turn is not None:
                 try:
                     return self._resolve_pending_host_turn(
@@ -411,7 +411,7 @@ class LLMTaskExecutor:
                 return LLMFailed(CorruptTaskStateError("The pending host task is missing."))
             if receipt.task["llm_task_id"] == task_id:
                 if receipt.response is None:
-                    return self._paused_outcome(state.pause)
+                    return self._paused_outcome(state.pause, context=context)
                 context.checkpoint()
                 state = replace(state, revision=state.revision + 1, pause=None)
                 store.compare_and_swap(state.revision - 1, state)
@@ -1030,7 +1030,8 @@ class LLMTaskExecutor:
         return self._pause(
             store, state, ResumeReason.EXTERNAL_CONDITION, "awaiting_host",
             input_required=False, request_ref=ref,
-            details={"host_task_id": receipt.task["task_id"], "response_contract": receipt.task["response_contract"],
+            details={"run_root": str(context.repository.root), "run_id": context.run_id,
+                     "host_task_id": receipt.task["task_id"], "response_contract": receipt.task["response_contract"],
                      "host_response_required": True, "next_step": "host-export, host-submit, then resume the owning workflow"},
         )
 
@@ -2848,11 +2849,16 @@ class LLMTaskExecutor:
         return self._paused_outcome(pause)
 
     @staticmethod
-    def _paused_outcome(pause: TaskPause) -> LLMPaused:
+    def _paused_outcome(pause: TaskPause, *, context: Any = None) -> LLMPaused:
+        from .workflow_support import _host_resume_details
+
+        details = pause.details if context is None else _host_resume_details(
+            pause.details, run_root=context.repository.root, run_id=context.run_id
+        )
         return LLMPaused(
             pause.reason,
             pause.resume_key,
-            pause.details,
+            details,
             pause.request_ref,
             pause.input_required,
             pause.response_contract,

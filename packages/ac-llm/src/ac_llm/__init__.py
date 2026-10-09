@@ -96,6 +96,7 @@ from .request import (
 from .workflow_support import (
     LLMTaskExecutor,
     awaiting_from_pause,
+    with_host_resume_location,
     execute_or_resume_matching,
     run_error_from_failure,
     semantic_retry_request,
@@ -104,6 +105,7 @@ from .workflow_support import (
 __version__ = "2.1.2"
 
 __all__ = [
+    "with_host_resume_location",
     "HostCoordinator",
     "resolve_execution_model",
     "HostTaskService",

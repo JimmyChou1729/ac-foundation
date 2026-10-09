@@ -56,6 +56,17 @@ always requests Host; `native_fallback=false` enforces the native route.
    resume operation or product runner. Repeat until complete or truly blocked.
 
 `LLMPaused.details.code=awaiting_host` uses the existing paused run lifecycle.
+Its details include the actual owning `run_root`, `run_id`, `host_task_id`, and
+`response_contract`; use those values directly for Host commands. A nested LLM
+task can share its workflow's run, so do not invent a separate child run ID.
+Product CLI adapters can use `with_host_resume_location(snapshot, run_root=...)`
+before serializing status or resume replies. It adds current repository location
+to older same-run Host pauses without rewriting snapshots, receipts or request
+hashes, including after moving a project. Wrapped proposer/reviewer pauses use
+`llm_code=awaiting_host`. Explicitly located different child runs remain intact.
+For multiple waiting workers, `host-pending` lists the other tasks in that same
+run. A successful status query does not mean the observed workflow completed.
+
 `input_required=false` means the owning resume command needs no supervisory
 `ResumeInput`; it does not mean the model response is optional. The exported
 task supplies `response_contract=ac.llm.host_response.v1` and its full schema.

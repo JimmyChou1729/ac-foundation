@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+from pathlib import Path
 from typing import Any, Protocol
 
-from ac_jobs import Awaiting, RunContext, RunError, canonical_json_bytes
+from ac_jobs import Awaiting, RunContext, RunError, RunSnapshot, RunStatus, canonical_json_bytes
 
 from .identity import resume_input_matches
 from .outcome import LLMFailed, LLMPaused, LLMTaskOutcome
@@ -50,6 +51,34 @@ def awaiting_from_pause(outcome: LLMPaused) -> Awaiting:
         outcome.response_contract,
         outcome.details,
     )
+
+
+def _host_resume_details(details, *, run_root, run_id):
+    if not details.get("host_task_id") or "awaiting_host" not in (
+        details.get("code"), details.get("llm_code")
+    ):
+        return details
+    # An explicitly located child run is not owned by this snapshot.
+    if details.get("run_id", run_id) != run_id:
+        return details
+    return {**details, "run_root": str(Path(run_root).expanduser().resolve()), "run_id": run_id}
+
+
+def with_host_resume_location(snapshot: RunSnapshot, *, run_root: str | Path) -> RunSnapshot:
+    """Present a Host pause with its current owning repository location.
+
+    This also supports old pauses and relocated projects without changing their
+    stored snapshots, request hashes, receipts, or recovery epochs. The caller
+    must supply the repository that owns the snapshot, not a guessed project path.
+    """
+    if snapshot.status is not RunStatus.PAUSED or snapshot.awaiting is None:
+        return snapshot
+    details = _host_resume_details(
+        snapshot.awaiting.details, run_root=run_root, run_id=snapshot.run_id
+    )
+    if details == snapshot.awaiting.details:
+        return snapshot
+    return replace(snapshot, awaiting=replace(snapshot.awaiting, details=details))
 
 
 def run_error_from_failure(outcome: LLMFailed) -> RunError:
@@ -97,6 +126,7 @@ def semantic_retry_request(
 __all__ = [
     "LLMTaskExecutor",
     "awaiting_from_pause",
+    "with_host_resume_location",
     "execute_or_resume_matching",
     "run_error_from_failure",
     "semantic_retry_request",
