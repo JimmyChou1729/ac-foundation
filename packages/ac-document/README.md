@@ -64,6 +64,60 @@ ac-document acquire-html-bundle https://example.org/document.html --output-dir d
 python -m pytest packages/ac-document/tests
 ```
 
+## PDF recognition through a visual Host
+
+A shell/Python host with image-reading capability can transcribe a PDF without
+installing MinerU or model weights. `pdftotext` and `pdftoppm` (Poppler) must be
+available. The text layer is auxiliary evidence; scanned pages still require
+actual visual inspection. This is an explicitly selected Host operation and
+inherits the host model and effort rather than selecting a CLI provider. Optional
+`--model` and `--reasoning-effort` express preferences through the same Host
+capability/policy checks as other LLM tasks; availability depends on the host.
+These preferences are part of the durable input and must remain identical on resume.
+
+```bash
+ac-document parse-pdf-host book.pdf --project-dir local/pdf-jobs \
+  --output-dir local/book-source --run-id book-host
+ac-document status --run-root local/pdf-jobs --run-id book-host
+ac-llm host-pending --run-root local/pdf-jobs --run-id book-host
+```
+
+The caller must configure an available `AC_LLM_HOST_COORDINATOR` as described in
+`ac-llm`. The command returns a paused command result with `awaiting_host`;
+Python does not wait for the chatting model. Use the ordinary `ac-llm host-export` / `host-submit` protocol for the exact exported task and request hash.
+The task includes one original page PNG, an auxiliary text layer, and a closed
+response schema. Preserve the advertised output envelope (including
+`ac.llm.host_turn.v1` if present). Repeat the original `parse-pdf-host` command
+after submission to consume the result and export the next page. For explicit
+provider interaction use `--resume-input` with the advertised resume contract.
+The supplied project directory is the `--run-root` for Host operations. The
+same run ID rejects a different PDF or output destination.
+
+Pages are processed serially with durable receipts. Restarting after an
+interruption reuses accepted pages, rendered images, and the source inventory;
+completed replay verifies the published bundle. After fixing a renderer or
+publication problem, repeat the same command with `--retry` to recover a failed
+run. Accepted page checkpoints are reused; unfinished pages use a new recovery
+epoch without replacing old receipts. User-stopped runs also require explicit
+`--retry` and are never resumed automatically. A failed semantic contract is
+reported without inventing missing material. Inspect the failure before retrying;
+unavailable or invalid pages can be retried after correcting host capabilities.
+Do not edit hashes or delete accepted state.
+
+The result is a standard `pdf_source_bundle` with `provider.name=host`, original
+PDF, original-page images, structured transcription evidence, and stable page
+anchors. Import it using `export-rich-document --pdf-source-manifest` exactly as
+for other PDF bundles. Heading, prose, equation, table, and figure blocks are
+supported. Figure resources retain the entire original page, with an explicit
+warning; this version does not invent crop coordinates. Bounding boxes are
+`null`. Provider-reported page coverage and warnings remain visible, and the
+bundle is **unreviewed**, not proofread or independently OCR-verified. Partial
+pages remain partial. If no page can be viewed, the run fails and retains its
+evidence rather than publishing an empty success. Blank pages are recorded
+explicitly. Existing bundle resource and page limits apply; large books may
+need splitting. No Host OCR accuracy or platform compatibility is implied by
+schema validation or offline fake-host tests.
+
 ## PDF source bundles from MinerU
 
 Import an existing **MinerU 3.4.5 pipeline** result into a portable document

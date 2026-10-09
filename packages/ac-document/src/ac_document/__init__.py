@@ -19,6 +19,7 @@ from .document_search import *
 from .document_structure import *
 from .epub import *
 from .html_bundle import *
+from .host_pdf import *
 from .mineru import import_mineru_bundle
 from .mineru_pages import restore_mineru_page_items
 from .mineru_runner import doctor_mineru, parse_pdf_mineru
@@ -44,6 +45,10 @@ from .workflows import *
 from . import workflow_support
 
 __all__ = [
+    "HostPDFRunner",
+    "HostPDFPaused",
+    "host_pdf_page_schema",
+    "parse_pdf_host",
     "PDF_SOURCE_BUNDLE_SCHEMA",
     "PDF_SOURCE_PROVENANCE_SCHEMA",
     "PDFSourceBundleError",
