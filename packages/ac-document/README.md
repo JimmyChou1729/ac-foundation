@@ -118,6 +118,13 @@ explicitly. Existing bundle resource and page limits apply; large books may
 need splitting. No Host OCR accuracy or platform compatibility is implied by
 schema validation or offline fake-host tests.
 
+Table and figure captions are optional. Empty or whitespace-only Host captions
+produce no caption element and never require an invented title. The rich parser
+also accepts existing empty `caption`/`figcaption` elements, so previously
+published bundles can be used unchanged. Nonempty inline caption content is
+preserved; embedded media or display math in a caption still requires a supported
+representation rather than being silently discarded.
+
 ## PDF source bundles from MinerU
 
 Import an existing **MinerU 3.4.5 pipeline** result into a portable document

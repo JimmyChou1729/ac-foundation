@@ -87,7 +87,7 @@ def _validate_page(value, page_number):
                 raise ValueError("table needs nonempty rows; use partial coverage for omissions")
         elif block["rows"]:
             raise ValueError("only tables can contain rows")
-        if block["kind"] != "table" and not block["text"].strip():
+        if block["kind"] not in {"table", "figure"} and not block["text"].strip():
             raise ValueError("recognized block text cannot be empty")
 
 
@@ -258,11 +258,13 @@ def _publish_bundle(output, pdf, images, responses):
             attrs = f'id="{source_id}" data-page-number="{number}"'
             kind = block["kind"]
             if kind == "figure":
-                body.append(f'<figure {attrs}><img src="{image_path}" alt="{text}"><figcaption>{text}</figcaption></figure>')
+                caption = f"<figcaption>{text}</figcaption>" if block["text"].strip() else ""
+                body.append(f'<figure {attrs}><img src="{image_path}" alt="{text}">{caption}</figure>')
                 warnings.append(f"Page {number}: figure retains full-page image; no precise crop was inferred.")
             elif kind == "table":
                 rows = "".join("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>" for row in block["rows"])
-                body.append(f'<table {attrs}><caption>{text}</caption><tbody>{rows}</tbody></table>')
+                caption = f"<caption>{text}</caption>" if block["text"].strip() else ""
+                body.append(f'<table {attrs}>{caption}<tbody>{rows}</tbody></table>')
             elif kind == "equation":
                 body.append(f'<div {attrs} class="equation">\\[{text}\\]</div>')
             else:

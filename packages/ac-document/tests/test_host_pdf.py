@@ -316,3 +316,28 @@ def test_explicit_host_preferences_are_durable(tmp_path):
     assert requirement["model"] == "gpt-example" and requirement["reasoning_effort"] == "low"
     with pytest.raises(RunConflictError):
         run(service, path, tmp_path)
+
+
+@pytest.mark.parametrize('caption', ['', ' \n\t ', 'Visible caption'])
+def test_host_bundle_keeps_uncaptioned_tables_and_figures(tmp_path, caption):
+    from bs4 import BeautifulSoup
+
+    path, service = source(tmp_path), runner(tmp_path, pages=('one page',))
+    assert run(service, path, tmp_path).status is RunStatus.PAUSED
+    submit(service.repository.root, page(1, blocks=[
+        {'kind': 'table', 'text': caption, 'rows': [['A', '1.25'], ['B', '0.50']]},
+        {'kind': 'figure', 'text': caption, 'rows': []},
+    ]))
+    snapshot = run(service, path, tmp_path)
+    assert snapshot.status is RunStatus.SUCCEEDED, snapshot.error
+    result = service.read_result(snapshot)
+    manifest = verify_pdf_source_bundle(result['manifest'])
+    html = BeautifulSoup(Path(result['source']).read_text(), 'html.parser')
+    assert bool(html.find('caption')) == bool(caption.strip())
+    assert bool(html.find('figcaption')) == bool(caption.strip())
+    assert [cell.get_text() for cell in html.select('td')] == ['A', '1.25', 'B', '0.50']
+    document = AcDocumentService(cache_root=tmp_path/'cache').parse_pdf_source(
+        result['source'], manifest=result['manifest'])
+    assert len(document.blocks) == 2
+    assert all(block.payload['caption'] == caption.strip() for block in document.blocks)
+    assert manifest['resources'][0]['rendered']
