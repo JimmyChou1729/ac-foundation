@@ -9,6 +9,7 @@ from ac_jobs import (
 
 from .claude_config import claude_connection_environment
 from .host_execution import HostCoordinator
+from .model_resolution import resolve_execution_model
 from .environment_doctor import environment_diagnostics
 from .host_tasks import HostTaskService
 from .api import LLMClient, LLMRunResult, LLMRunView, LLMTaskService
@@ -104,6 +105,7 @@ __version__ = "2.1.2"
 
 __all__ = [
     "HostCoordinator",
+    "resolve_execution_model",
     "HostTaskService",
     "claude_connection_environment",
     "DEFAULT_MAX_PARALLEL_PROVIDER_CALLS",

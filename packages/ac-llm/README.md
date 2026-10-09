@@ -5,6 +5,12 @@ provider and model resolution, structured-output validation, sessions, and
 durable recovery over `ac-jobs`. Research-specific prompts and orchestration
 belong to the packages that call it.
 
+New durable workflows can call `resolve_execution_model(selection, options=...)`
+to freeze a recipe using the same coordinator routing and prelaunch fallback as
+execution. This performs diagnostics, not model generation. Explicit options
+take precedence over the environment. Keep existing recipes unchanged on resume;
+the config-only `resolve_model_selection` does not apply coordinator policy.
+
 The formal `host` provider supports durable, non-blocking execution by a calling
 agent. See [Host execution](HOST_EXECUTION.md) for coordinator declarations,
 conservative pre-launch fallback, export/submit/resume, and honest model metadata.

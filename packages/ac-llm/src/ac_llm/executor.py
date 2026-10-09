@@ -24,7 +24,6 @@ from ac_jobs import (
     encode_artifact_ref,
 )
 
-from .config import resolve_model_selection
 from .errors import (
     AcLLMError,
     AdoptionAuthorizationError,
@@ -3026,33 +3025,11 @@ class LLMTaskExecutor:
         return options
 
     def _resolve_model(self, request: LLMRequest, *, options: LLMExecutionOptions | None = None) -> Any:
-        options = self._host_options(LLMExecutionOptions() if options is None else options)
-        available = self.registry.names()
-        coordinator = options.host_coordinator
-        selection = request.model
-        if coordinator is not None and "host" in available:
-            preferred = coordinator.default_provider if selection.provider == "auto" else selection.provider
-            if selection.provider == "auto" and preferred not in available:
-                raise InvalidRequestError(f"Coordinator default provider is not registered: {preferred}")
-            if preferred == "host":
-                return resolve_model_selection(replace(selection, provider="host"), available=available)
-            if preferred in available and request.session is None and coordinator.native_fallback:
-                diagnostic = self._adapter(preferred, options).doctor()
-                if not diagnostic.available and diagnostic.prelaunch_unavailable:
-                    return resolve_model_selection(replace(selection, provider="host"), available=available)
-            if selection.provider == "auto" and preferred in available:
-                return resolve_model_selection(replace(selection, provider=preferred), available=available)
-        if request.model.provider == "auto":
-            healthy: list[str] = []
-            for name in available:
-                try:
-                    if self._adapter(name, options).doctor().available:
-                        healthy.append(name)
-                except Exception:
-                    continue
-            if healthy:
-                available = tuple(healthy)
-        return resolve_model_selection(request.model, available=available)
+        from .model_resolution import resolve_execution_model
+
+        return resolve_execution_model(
+            request.model, options=options, registry=self.registry, session=request.session
+        )
 
     def _canonicalize_inputs(
         self,
