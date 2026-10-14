@@ -14,6 +14,7 @@ from .html_bundle import (
     html_source_bundle_to_document,
     materialize_html_source_bundle,
 )
+from .host_pdf import parse_pdf_host
 from .mineru import import_mineru_bundle
 from .mineru_runner import doctor_mineru, parse_pdf_mineru
 from .mineru_config import configure_mineru, doctor_configured_mineru, parse_pdf_configured_mineru
@@ -437,6 +438,17 @@ _OPERATIONS = (
         ),
         import_mineru_bundle,
         effects=frozenset({OperationEffect.ARBITRARY_LOCAL_PATH}),
+    ),
+    _spec(
+        "parse-pdf-host",
+        object_schema({"pdf": _NONEMPTY_STRING, "project_dir": _NONEMPTY_STRING,
+                       "output_dir": _NONEMPTY_STRING, "run_id": _NULLABLE_STRING,
+                       "retry": {"type": "boolean"}, "model": _NULLABLE_STRING,
+                       "reasoning_effort": {"enum": [None, "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]},
+                       "resume_input": {"type": ["object", "null"]}},
+                      required=("pdf", "project_dir", "output_dir")),
+        parse_pdf_host,
+        effects=frozenset({OperationEffect.RECURSIVE_LLM, OperationEffect.ARBITRARY_LOCAL_PATH}),
     ),
     _spec(
         "verify-pdf-source-bundle",

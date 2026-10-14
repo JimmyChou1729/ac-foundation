@@ -3548,7 +3548,7 @@ def _html_figure_block(
         else None
     )
     caption_segment = (
-        _html_single_inline_segment(caption_node)
+        _html_single_inline_segment(caption_node, allow_empty=True)
         if isinstance(caption_node, Tag)
         else _inline_payload([])
     )
@@ -4321,7 +4321,7 @@ def _append_html_table_node_blocks(
         else 0
     )
     caption_segment = (
-        _html_single_inline_segment(caption_node)
+        _html_single_inline_segment(caption_node, allow_empty=True)
         if isinstance(caption_node, Tag)
         else _inline_payload([])
     )
@@ -5005,10 +5005,14 @@ def _html_segment_payload(
     )
 
 
-def _html_single_inline_segment(node: Tag) -> Mapping[str, Any]:
+def _html_single_inline_segment(node: Tag, *, allow_empty: bool = False) -> Mapping[str, Any]:
     segments = _html_inline_segments(node)
+    if not segments:
+        if allow_empty:
+            return _inline_payload([])
+        raise ValueError("HTML inline field has no inline content")
     if len(segments) != 1 or not isinstance(segments[0], Mapping):
-        raise ValueError("HTML inline field cannot contain a block element")
+        raise ValueError("HTML inline field requires a single inline segment without embedded media or display math")
     return segments[0]
 
 
