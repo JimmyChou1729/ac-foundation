@@ -19,7 +19,7 @@ FORMATTER_DECISION_SCHEMA: dict[str, Any] = {
     "properties": {
         "action": {"type": "string", "enum": ["format", "insufficient"]},
         "reason": {"type": "string"},
-        "formatted_output": {},
+        "formatted_output": {"type": "string"},
     },
     "required": ["action", "reason", "formatted_output"],
     "additionalProperties": False,
@@ -81,10 +81,10 @@ def formatter_task_id(
     source_sha256: str,
 ) -> str:
     identity = (
-        f"ac.llm.schema_formatter.v1\0{outer_semantic_key}\0"
+        f"ac.llm.schema_formatter.v2\0{outer_semantic_key}\0"
         f"{generation}\0{source_sha256}"
     )
-    return f"format-v1-{hashlib.sha256(identity.encode()).hexdigest()[:32]}"
+    return f"format-v2-{hashlib.sha256(identity.encode()).hexdigest()[:32]}"
 
 
 def formatter_prompt(
@@ -99,8 +99,8 @@ def formatter_prompt(
         "scientific claims, scores, numbers, or judgments, or change the meaning.\n"
         "Return action=\"format\" only when every required content field can be "
         "filled from the source. Otherwise return action=\"insufficient\" with "
-        "formatted_output=null. For action=\"format\", put the reformatted value "
-        "in formatted_output. Return exactly one JSON object matching the supplied "
+        "formatted_output=\"\". For action=\"format\", put the reformatted value "
+        "as a JSON-encoded string in formatted_output. Return exactly one JSON object matching the supplied "
         "formatter decision schema.\n\n"
         "## Source\n"
         f"{source.text}\n\n"
@@ -122,9 +122,13 @@ def decode_formatting_decision(
     reason = value["reason"]
     formatted = value["formatted_output"]
     if action == "insufficient":
-        if formatted is not None:
+        if formatted != "":
             raise SchemaFormatterError("schema_formatter_invalid_insufficient_decision")
         return FormattingDecision("insufficient", reason)
+    try:
+        formatted = json.loads(formatted)
+    except json.JSONDecodeError as exc:
+        raise SchemaFormatterError("schema_formatter_invalid_json") from exc
     validation_errors = tuple(
         Draft202012Validator(dict(target_schema)).iter_errors(formatted)
     )

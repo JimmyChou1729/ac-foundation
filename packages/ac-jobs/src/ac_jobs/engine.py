@@ -596,12 +596,7 @@ class RunRepository:
                 current.attempt == snapshot.attempt
                 and (
                     current.status in {RunStatus.PENDING, RunStatus.RUNNING}
-                    or (
-                        current.status is RunStatus.PAUSED
-                        and current.awaiting is not None
-                        and current.awaiting.reason
-                        is ResumeReason.EXECUTION_STOPPED
-                    )
+                    or current.status is RunStatus.PAUSED
                 )
             )
             if existing is None and accepted:
@@ -612,7 +607,12 @@ class RunRepository:
             return request
 
         snapshot = store.read()
-        if snapshot.status in _TERMINAL or snapshot.status is RunStatus.PAUSED:
+        if snapshot.status in _TERMINAL:
+            return self.inspect(run_id)
+        if snapshot.status is RunStatus.PAUSED:
+            # A paused attempt can still have externally submitted work.
+            # Its stop token inhibits that work until an explicit new attempt.
+            persist(snapshot)
             return self.inspect(run_id)
         if snapshot.status is RunStatus.RUNNING:
             persist(snapshot)
@@ -643,12 +643,15 @@ class RunRepository:
                 current = store.read()
             if current.status is RunStatus.PENDING:
                 raise exc
-            if current.status is RunStatus.RUNNING:
+            if current.status in {RunStatus.RUNNING, RunStatus.PAUSED}:
                 persist(current)
             return self.inspect(run_id)
         try:
             snapshot = store.read()
-            if snapshot.status in _TERMINAL or snapshot.status is RunStatus.PAUSED:
+            if snapshot.status in _TERMINAL:
+                return self.inspect(run_id)
+            if snapshot.status is RunStatus.PAUSED:
+                persist(snapshot)
                 return self.inspect(run_id)
             request = persist(snapshot)
             paused = _stopped_snapshot(

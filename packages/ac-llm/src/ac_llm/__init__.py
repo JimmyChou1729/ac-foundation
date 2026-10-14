@@ -8,6 +8,10 @@ from ac_jobs import (
 )
 
 from .claude_config import claude_connection_environment
+from .host_execution import HostCoordinator
+from .model_resolution import resolve_execution_model
+from .environment_doctor import environment_diagnostics
+from .host_tasks import HostTaskService
 from .api import LLMClient, LLMRunResult, LLMRunView, LLMTaskService
 from .errors import (
     AcLLMError,
@@ -92,6 +96,7 @@ from .request import (
 from .workflow_support import (
     LLMTaskExecutor,
     awaiting_from_pause,
+    with_host_resume_location,
     execute_or_resume_matching,
     run_error_from_failure,
     semantic_retry_request,
@@ -100,6 +105,10 @@ from .workflow_support import (
 __version__ = "2.1.2"
 
 __all__ = [
+    "with_host_resume_location",
+    "HostCoordinator",
+    "resolve_execution_model",
+    "HostTaskService",
     "claude_connection_environment",
     "DEFAULT_MAX_PARALLEL_PROVIDER_CALLS",
     "RESUME_SCHEMA_VERSION",
@@ -177,6 +186,7 @@ __all__ = [
     "decode_request",
     "decode_resume_input",
     "execute_or_resume_matching",
+    "environment_diagnostics",
     "request_to_document",
     "resume_input_matches",
     "resume_input_to_document",

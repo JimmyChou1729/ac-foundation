@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..output import CandidateMaterial
-from ._cli import executable_diagnostic, run_cli
+from ._cli import executable_diagnostic, missing_executable, run_cli
 from .base import (
     IsolationMode,
     ProviderCapabilities,
@@ -59,6 +59,7 @@ class KimiAdapter:
             available,
             path,
             details={"warning": "provider_configuration_is_inherited"},
+            prelaunch_unavailable=not available and missing_executable(self.binary),
         )
 
     def start(

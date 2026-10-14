@@ -75,6 +75,14 @@ def _completed(value: object, *, handle: str = "thread-1") -> ProviderExecution:
     )
 
 
+def test_run_id_can_be_inspected_before_starting(tmp_path):
+    request = LLMRequest("inspect-before-start", "fixture", JsonOutput({"type": "object"}))
+    client = LLMClient()
+    run_id = client.run_id_for(request)
+    assert run_id == api_module.derive_run_id(api_module.HANDLER_NAME, request.task_id)
+    assert not RunRepository(tmp_path).run_directory(run_id).exists()
+
+
 def test_auto_selection_skips_unavailable_provider_before_binding(
     adapter,
     registry,
@@ -559,9 +567,7 @@ def test_content_rich_invalid_output_uses_formatter_without_worker_replacement(
                     {
                         "action": "format",
                         "reason": "required content is present",
-                        "formatted_output": {
-                            "answer": "the complete answer is present"
-                        },
+                        "formatted_output": '{"answer":"the complete answer is present"}',
                     },
                     handle="formatter",
                 ),
@@ -618,7 +624,7 @@ def test_formatter_insufficient_gets_one_full_regeneration(
                 {
                     "action": "insufficient",
                     "reason": "required answer is absent",
-                    "formatted_output": None,
+                    "formatted_output": "",
                 },
                 handle="formatter",
             ),
@@ -651,7 +657,7 @@ def test_invalid_formatter_result_gets_one_full_regeneration(
                 {
                     "action": "format",
                     "reason": "bad formatting",
-                    "formatted_output": {"wrong": "shape"},
+                    "formatted_output": '{"wrong":"shape"}',
                 },
                 handle="formatter",
             ),
@@ -757,7 +763,7 @@ def test_formatter_external_pause_resumes_without_replaying_worker(
             {
                 "action": "format",
                 "reason": "required content is present",
-                "formatted_output": {"answer": "the complete answer is present"},
+                "formatted_output": '{"answer":"the complete answer is present"}',
             },
             handle="formatter",
         )
@@ -782,7 +788,7 @@ def test_formatter_completion_replays_after_outer_acceptance_crash(
                 {
                     "action": "format",
                     "reason": "required content is present",
-                    "formatted_output": {"answer": "the complete answer is present"},
+                    "formatted_output": '{"answer":"the complete answer is present"}',
                 },
                 handle="formatter",
             ),
