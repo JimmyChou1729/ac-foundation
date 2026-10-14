@@ -102,7 +102,7 @@ from .workflow_support import (
     semantic_retry_request,
 )
 
-__version__ = "2.1.2"
+__version__ = "2.2.0"
 
 __all__ = [
     "with_host_resume_location",

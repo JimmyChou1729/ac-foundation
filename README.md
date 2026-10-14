@@ -59,8 +59,9 @@ build locally. Published tags are immutable; corrections use a new version.
 Historical missing tags need not be backfilled. Only tag an old version when
 its exact original release commit is known.
 
-Product repositories depend on Foundation with `>=2,<3`; runtime source locks
-pin an exact full Git commit SHA.
+Host-enabled packages require Foundation `>=2.2.0,<3`; runtime source locks
+pin an exact full Git commit SHA. Minor and patch release preparation preserves
+existing dependency floors; a major release advances their major bounds.
 
 The canonical product bootstrap is `runtime/ac_runtime.py`. Its explicit
 `AC_INSTALL_SOURCE=mixed` mode uses a local checkout only for sources whose
