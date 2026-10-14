@@ -51,8 +51,7 @@ if tuple(map(int, version.split("."))) <= tuple(map(int, current.split("."))):
     raise SystemExit(f"release version must be newer than {current}: {version}")
 current_major = int(current.split(".")[0])
 target_major = int(version.split(".")[0])
-current_range = f">={current_major},<{current_major + 1}"
-target_range = f">={target_major},<{target_major + 1}"
+dependency_pattern = re.compile(r"(ac-[a-z-]+)>=(\d+(?:\.\d+){0,2}),<(\d+)")
 
 updates: list[tuple[Path, str, Path, str]] = []
 
@@ -61,11 +60,19 @@ for path in projects:
     if data["project"]["version"] != current:
         raise SystemExit(f"{path} version differs from VERSION")
     dependencies = data["project"].get("dependencies", [])
+    replacements = {}
     for dependency in dependencies:
-        if dependency.startswith("ac-") and current_range not in dependency:
-            raise SystemExit(
-                f"{path} internal dependency must use {current_range}: {dependency}"
-            )
+        if not dependency.startswith("ac-"):
+            continue
+        match = dependency_pattern.fullmatch(dependency)
+        floor = tuple(map(int, match[2].split("."))) if match else ()
+        padded_floor = floor + (0,) * (3 - len(floor))
+        if (match is None or floor[0] != current_major
+                or int(match[3]) != current_major + 1
+                or padded_floor > tuple(map(int, current.split(".")))):
+            raise SystemExit(f"{path} internal dependency must have a compatible major-bounded floor: {dependency}")
+        if target_major != current_major:
+            replacements[dependency] = f"{match[1]}>={target_major},<{target_major + 1}"
     text = path.read_text(encoding="utf-8")
     updated_text, count = re.subn(
         rf'(?m)^version = "{re.escape(current)}"$',
@@ -75,7 +82,8 @@ for path in projects:
     )
     if count != 1:
         raise SystemExit(f"could not update project version in {path}")
-    updated_text = updated_text.replace(current_range, target_range)
+    for dependency, replacement in replacements.items():
+        updated_text = updated_text.replace(f'"{dependency}"', f'"{replacement}"')
 
     init_path = next((path.parent / "src").glob("*/__init__.py"))
     init_text = init_path.read_text(encoding="utf-8")

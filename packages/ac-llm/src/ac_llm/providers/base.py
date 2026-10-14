@@ -39,6 +39,7 @@ class ProviderTerminalKind(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     STOPPED = "stopped"
+    AWAITING_HOST = "awaiting_host"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class ProviderDiagnostic:
     available: bool
     executable: str | None
     details: Mapping[str, Any] = field(default_factory=dict)
+    prelaunch_unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,11 @@ class ProviderExecution:
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.terminal_kind is ProviderTerminalKind.AWAITING_HOST and (
+            self.candidates or self.native_handle is not None or self.failure is not None
+            or self.usage is not None
+        ):
+            raise ValueError("A host handoff cannot contain provider results.")
         if self.terminal_kind is ProviderTerminalKind.FAILED and self.failure is None:
             raise ValueError("A failed provider execution requires a normalized failure.")
         if self.terminal_kind is ProviderTerminalKind.COMPLETED and self.failure is not None:

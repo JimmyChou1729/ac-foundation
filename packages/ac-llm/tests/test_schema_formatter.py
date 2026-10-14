@@ -5,6 +5,7 @@ import pytest
 from ac_llm import JsonOutput
 from ac_llm.output import CandidateMaterial
 from ac_llm.schema_formatter import (
+    FORMATTER_DECISION_SCHEMA,
     FormattingSource,
     SchemaFormatterError,
     decode_formatting_decision,
@@ -55,7 +56,7 @@ def test_formatter_decision_validates_target_and_rejects_fabricated_numbers() ->
         {
             "action": "format",
             "reason": "content present",
-            "formatted_output": {"score": 92},
+            "formatted_output": '{"score":92}',
         },
         source=source,
         target_schema=schema,
@@ -67,11 +68,28 @@ def test_formatter_decision_validates_target_and_rejects_fabricated_numbers() ->
             {
                 "action": "format",
                 "reason": "invented",
-                "formatted_output": {"score": 88},
+                "formatted_output": '{"score":88}',
             },
             source=source,
             target_schema=schema,
         )
+
+    with pytest.raises(SchemaFormatterError, match="invalid_json"):
+        decode_formatting_decision(
+            {
+                "action": "format",
+                "reason": "incomplete JSON",
+                "formatted_output": '{"score":',
+            },
+            source=source,
+            target_schema=schema,
+        )
+
+
+def test_formatter_decision_has_a_typed_payload_for_native_json_schema() -> None:
+    assert FORMATTER_DECISION_SCHEMA["properties"]["formatted_output"] == {
+        "type": "string"
+    }
 
 
 def test_formatter_task_identity_is_deterministic_and_generation_bound() -> None:

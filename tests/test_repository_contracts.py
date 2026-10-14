@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -43,7 +44,12 @@ def test_package_set_metadata_and_dependency_graph() -> None:
         assert dependencies == internal_dependencies
         for dependency in project.get("dependencies", []):
             if dependency.startswith("ac-"):
-                assert dependency.endswith(f">={MAJOR},<{MAJOR + 1}")
+                match = re.fullmatch(r"ac-[a-z-]+>=(\d+(?:\.\d+){0,2}),<(\d+)", dependency)
+                assert match is not None
+                floor = tuple(map(int, match[1].split(".")))
+                floor += (0,) * (3 - len(floor))
+                assert floor[0] == MAJOR and int(match[2]) == MAJOR + 1
+                assert (2, 2, 0) <= floor <= tuple(map(int, VERSION.split(".")))
 
 
 def test_foundation_has_no_product_plugin_or_skill() -> None:

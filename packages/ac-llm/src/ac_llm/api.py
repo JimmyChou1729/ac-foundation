@@ -483,6 +483,11 @@ class LLMClient:
     ) -> None:
         self.service = service or LLMTaskService(registry=registry)
 
+    @staticmethod
+    def run_id_for(request: LLMRequest) -> str:
+        """Return the default durable identifier without starting execution."""
+        return derive_run_id(HANDLER_NAME, request.task_id)
+
     def generate(
         self,
         request: LLMRequest,
@@ -492,7 +497,7 @@ class LLMClient:
         options: LLMExecutionOptions = LLMExecutionOptions(),
         event_sink: EventSink | None = None,
     ) -> LLMRunResult:
-        resolved_run_id = run_id or derive_run_id(HANDLER_NAME, request.task_id)
+        resolved_run_id = run_id or self.run_id_for(request)
         return self._invoke(
             RunRepository(run_root),
             resolved_run_id,

@@ -4,19 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ac-document"
-version = "2.1.2"
+version = "2.2.0"
 description = "Content-addressed document ingestion, parsing, search, and rich-document contracts for AC Foundation."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "AC Foundation" }]
 requires-python = ">=3.11"
 dependencies = [
-  "ac-jobs>=2,<3",
-  "ac-llm>=2,<3",
+  "ac-jobs>=2.2.0,<3",
+  "ac-llm>=2.2.0,<3",
   "beautifulsoup4>=4.12",
   "jsonschema>=4.22",
   "lxml>=5.0",
-  "httpx>=0.27,<1"
+  "httpx>=0.28.1,<1",
+  "socksio>=1,<2"
 ]
 classifiers = [
   "Programming Language :: Python :: 3",

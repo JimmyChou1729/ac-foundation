@@ -19,6 +19,7 @@ from ac_jobs import (
 )
 
 from .registry import dispatch_operation, to_json_value
+from .host_pdf import HostPDFPaused
 from .workflows.keywords import KeywordExtractionPaused
 
 
@@ -124,6 +125,16 @@ def _parser() -> _Parser:
         mode.add_argument("--executable")
         mode.add_argument("--api-url")
         command.add_argument("--token-env")
+
+    host_pdf = commands.add_parser("parse-pdf-host")
+    host_pdf.add_argument("pdf")
+    host_pdf.add_argument("--project-dir", required=True)
+    host_pdf.add_argument("--output-dir", required=True)
+    host_pdf.add_argument("--run-id")
+    host_pdf.add_argument("--retry", action="store_true")
+    host_pdf.add_argument("--model")
+    host_pdf.add_argument("--reasoning-effort", choices=("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"))
+    host_pdf.add_argument("--resume-input", type=_json_object)
 
     verified_pdf = commands.add_parser("verify-pdf-source-bundle")
     verified_pdf.add_argument("manifest")
@@ -270,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             exit_code=0,
         )
-    except KeywordExtractionPaused as exc:
+    except (KeywordExtractionPaused, HostPDFPaused) as exc:
         return _emit(command_result_from_snapshot(exc.snapshot), exit_code=0)
     except _HelpRequested:
         return 0
