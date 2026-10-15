@@ -33,14 +33,19 @@ See `AGENTS.md` for repository rules.
 
 ## Release
 
-All packages share one version. Prepare an update with:
+Choose the next `X.Y.Z` version and prepare the shared package version
+from a clean task branch:
 
 ```bash
 scripts/release-ac-foundation.sh X.Y.Z
 ```
 
-Commit the changes through a PR. After it passes CI and merges into `main`,
-create an annotated `vX.Y.Z` tag on the merged commit. Published tags are immutable.
+Include the version updates in the release PR and merge it with a merge commit.
+
+When a PR changes `VERSION` and merges into `main`, CI validates the release
+and automatically creates an annotated `vX.Y.Z` tag after all checks pass.
+Other PRs do not create tags. If tagging fails, rerun the failed CI run.
+Published tags are immutable.
 
 ## License
 
